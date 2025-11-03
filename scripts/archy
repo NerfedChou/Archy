@@ -1,0 +1,121 @@
+#!/bin/bash
+
+# Archy - Local AI Assistant CLI
+# Simple wrapper to interact with Archy AI assistant
+
+set -e
+
+ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
+MCP_SERVER="http://localhost:8000"
+OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+
+# Color codes
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# Functions
+print_info() {
+    echo -e "${BLUE}[*]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[+]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[-]${NC} $1"
+}
+
+check_services() {
+    print_info "Checking Archy services..."
+    
+    # Check MCP Server
+    if ! curl -s "$MCP_SERVER/health" > /dev/null 2>&1; then
+        print_error "MCP Server not responding at $MCP_SERVER"
+        print_info "Make sure to run: docker-compose up"
+        exit 1
+    fi
+    
+    print_success "MCP Server: OK"
+}
+
+get_system_info() {
+    curl -s "$MCP_SERVER/system-info" | jq .
+}
+
+list_tools() {
+    curl -s "$MCP_SERVER/detect-tools" | jq .
+}
+
+execute_command() {
+    local cmd="$1"
+    curl -s -X POST "$MCP_SERVER/execute" \
+        -H "Content-Type: application/json" \
+        -d "{\"command\": \"$cmd\", \"timeout\": 30}" | jq .
+}
+
+show_help() {
+    cat <<EOF
+${GREEN}Archy - Local AI Assistant for Arch Linux${NC}
+
+Usage: archy [command] [options]
+
+Commands:
+  help              Show this help message
+  status            Check Archy service status
+  sysinfo           Show system information
+  tools             List available tools
+  chat [question]   Ask Archy a question
+  
+Examples:
+  archy "update my system"
+  archy "what tools are installed?"
+  archy "scan localhost with nmap"
+  archy "fix my package errors"
+
+For more info: https://github.com/NerfedChou/Archy
+EOF
+}
+
+# Main logic
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+case "$1" in
+    help)
+        show_help
+        ;;
+    status)
+        check_services
+        print_success "Archy is running!"
+        ;;
+    sysinfo)
+        check_services
+        print_info "System Information:"
+        get_system_info
+        ;;
+    tools)
+        check_services
+        print_info "Available Tools:"
+        list_tools
+        ;;
+    chat|*)
+        check_services
+        # Pass the rest as the question/command
+        question="$@"
+        print_info "Processing: $question"
+        
+        # For now, just show what we'd send
+        print_success "Your question: $question"
+        print_info "This would be sent to Ollama for processing"
+        ;;
+esac
