@@ -72,13 +72,14 @@ Commands:
   status            Check Archy service status
   sysinfo           Show system information
   tools             List available tools
-  chat [question]   Ask Archy a question
-  
+  chat              Enter interactive chat mode
+  chat [question]   Ask Archy a single question
+
 Examples:
-  archy "update my system"
-  archy "what tools are installed?"
-  archy "scan localhost with nmap"
-  archy "fix my package errors"
+  archy chat                    # Interactive chat
+  archy chat "update my system"
+  archy chat "what tools are installed?"
+  archy chat "scan localhost with nmap"
 
 For more info: https://github.com/NerfedChou/Archy
 EOF
@@ -86,7 +87,9 @@ EOF
 
 # Main logic
 if [[ $# -eq 0 ]]; then
-    show_help
+    # No arguments: launch interactive chat mode
+    print_success "Launching interactive chat..."
+    python3 "$(dirname "$0")/archy_chat.py"
     exit 0
 fi
 
@@ -108,14 +111,20 @@ case "$1" in
         print_info "Available Tools:"
         list_tools
         ;;
-    chat|*)
-        check_services
-        # Pass the rest as the question/command
-        question="$@"
-        print_info "Processing: $question"
-        
-        # For now, just show what we'd send
-        print_success "Your question: $question"
-        print_info "This would be sent to Ollama for processing"
+    chat)
+        # Interactive or single-question chat mode
+        if [[ $# -eq 1 ]]; then
+            # Interactive mode: archy chat
+            print_success "Launching interactive chat..."
+            python3 "$(dirname "$0")/archy_chat.py"
+        else
+            # Single question mode: archy chat "question"
+            shift  # Remove 'chat' from arguments
+            python3 "$(dirname "$0")/archy_chat.py" "$@"
+        fi
+        ;;
+    *)
+        # Default: treat as question for single-query mode
+        python3 "$(dirname "$0")/archy_chat.py" "$@"
         ;;
 esac
