@@ -3,11 +3,9 @@
 # Archy - Local AI Assistant CLI
 # Simple wrapper to interact with Archy AI assistant
 
-set -e
-
 ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
 MCP_SERVER="http://localhost:8000"
-OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+GROQ_API_KEY="${GROQ_API_KEY:-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}"
 
 # Color codes
 GREEN='\033[0;32m'
@@ -33,53 +31,21 @@ print_error() {
     echo -e "${RED}[-]${NC} $1"
 }
 
-check_services() {
-    print_info "Checking Archy services..."
-    
-    # Check MCP Server
-    if ! curl -s "$MCP_SERVER/health" > /dev/null 2>&1; then
-        print_error "MCP Server not responding at $MCP_SERVER"
-        print_info "Make sure to run: docker-compose up"
-        exit 1
-    fi
-    
-    print_success "MCP Server: OK"
-}
-
-get_system_info() {
-    curl -s "$MCP_SERVER/system-info" | jq .
-}
-
-list_tools() {
-    curl -s "$MCP_SERVER/detect-tools" | jq .
-}
-
-execute_command() {
-    local cmd="$1"
-    curl -s -X POST "$MCP_SERVER/execute" \
-        -H "Content-Type: application/json" \
-        -d "{\"command\": \"$cmd\", \"timeout\": 30}" | jq .
-}
-
 show_help() {
     cat <<EOF
-${GREEN}Archy - Local AI Assistant for Arch Linux${NC}
+${GREEN}Archy - Local AI Assistant${NC}
 
 Usage: archy [command] [options]
 
 Commands:
   help              Show this help message
-  status            Check Archy service status
-  sysinfo           Show system information
-  tools             List available tools
   chat              Enter interactive chat mode
   chat [question]   Ask Archy a single question
 
 Examples:
   archy chat                    # Interactive chat
-  archy chat "update my system"
-  archy chat "what tools are installed?"
-  archy chat "scan localhost with nmap"
+  archy chat "what tools do I have?"
+  archy "what is arch linux?"
 
 For more info: https://github.com/NerfedChou/Archy
 EOF
@@ -89,7 +55,7 @@ EOF
 if [[ $# -eq 0 ]]; then
     # No arguments: launch interactive chat mode
     print_success "Launching interactive chat..."
-    python3 "$(dirname "$0")/archy_chat.py"
+    exec python3 "$(dirname "$0")/archy_chat.py"
     exit 0
 fi
 
@@ -97,34 +63,20 @@ case "$1" in
     help)
         show_help
         ;;
-    status)
-        check_services
-        print_success "Archy is running!"
-        ;;
-    sysinfo)
-        check_services
-        print_info "System Information:"
-        get_system_info
-        ;;
-    tools)
-        check_services
-        print_info "Available Tools:"
-        list_tools
-        ;;
     chat)
         # Interactive or single-question chat mode
         if [[ $# -eq 1 ]]; then
             # Interactive mode: archy chat
             print_success "Launching interactive chat..."
-            python3 "$(dirname "$0")/archy_chat.py"
+            exec python3 "$(dirname "$0")/archy_chat.py"
         else
             # Single question mode: archy chat "question"
             shift  # Remove 'chat' from arguments
-            python3 "$(dirname "$0")/archy_chat.py" "$@"
+            exec python3 "$(dirname "$0")/archy_chat.py" "$@"
         fi
         ;;
     *)
         # Default: treat as question for single-query mode
-        python3 "$(dirname "$0")/archy_chat.py" "$@"
+        exec python3 "$(dirname "$0")/archy_chat.py" "$@"
         ;;
 esac
