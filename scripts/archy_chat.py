@@ -51,6 +51,7 @@ class ArchyChat:
 
         self.mcp_server = os.getenv("MCP_SERVER", "http://localhost:8000")
         self.conversation_history = []
+        self.foot_window_opened = False  # Track if foot window has been opened
 
         # Validate Gemini API key
         if not self.gemini_api_key:
@@ -145,15 +146,35 @@ You are a thinking, learning partner. Your goal is to make working on this syste
 
         return None
 
+    def send_command_to_tmux(self, command: str, session: str = "archy_session") -> bool:
+        """Send a command to the tmux session (non-blocking, runs in background)"""
+        try:
+            subprocess.run(['tmux', 'send-keys', '-t', session, command, 'C-m'], check=False)
+            return True
+        except Exception:
+            return False
+
+    def capture_tmux_output(self, session: str = "archy_session", lines: int = 100) -> str:
+        """Capture the visible pane output from tmux session"""
+        try:
+            result = subprocess.run(
+                ['tmux', 'capture-pane', '-pt', session, '-S', f'-{lines}'],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.stdout if result.returncode == 0 else ""
+        except Exception:
+            return ""
+
     def execute_command_in_terminal(self, command: str) -> str:
-        """Execute a command in a new terminal window or detached for GUI apps"""
+        """Execute a command using background tmux session with foot as the visible frontend.
+        Only opens foot on first command - subsequent commands reuse the same window.
+        Falls back to GUI desktop entry or legacy terminal launch if tmux/foot unavailable."""
         # Extract the first command (app name) from the command string
         cmd_parts = command.strip().split()
         app_name = cmd_parts[0].split('/')[-1]  # get basename if it's a path
 
-        # Try to find a desktop entry for this command
+        # Try to find a desktop entry for this command (GUI apps)
         desktop_entry = self.find_desktop_entry(app_name)
-
         if desktop_entry:
             # Found a desktop entry - launch detached using gtk-launch
             try:
@@ -177,26 +198,47 @@ You are a thinking, learning partner. Your goal is to make working on this syste
             except Exception as e:
                 return f"Error launching app: {str(e)}"
 
-        # No desktop entry found - launch in terminal (CLI command)
-        term, args = self.detect_terminal()
+        # CLI command: prefer tmux backend with foot frontend
+        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+        if self.check_command_available('tmux'):
+            try:
+                # Ensure detached tmux session exists
+                has = subprocess.run(['tmux', 'has-session', '-t', session],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if has.returncode != 0:
+                    subprocess.run(['tmux', 'new-session', '-d', '-s', session], check=True)
 
+                # Send the command into the tmux session
+                subprocess.run(['tmux', 'send-keys', '-t', session, command, 'C-m'], check=False)
+
+                # Only open foot window on FIRST command - reuse it for subsequent commands
+                if not self.foot_window_opened and self.check_command_available('foot'):
+                    subprocess.Popen(['foot', '-e', 'tmux', 'attach', '-t', session],
+                                   start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    self.foot_window_opened = True
+                    return f"✓ Opening foot terminal for: {command}"
+                else:
+                    return f"✓ Command sent to existing tmux session for: {command}"
+
+            except Exception:
+                # If tmux path fails, fall back to legacy terminal launch
+                pass
+
+        # Fallback: no tmux available or tmux path failed - use detected terminal
+        term, args = self.detect_terminal()
         if not term:
             return "Error: No terminal emulator found. Please install foot, kitty, konsole, gnome-terminal, or xfce4-terminal."
 
         # Build the command that will run in the new terminal
-        # Add a read prompt at the end so the terminal doesn't close immediately
         terminal_cmd = f'{command}; echo ""; echo "Press Enter to close..."; read'
 
         # Build full terminal launch command
         if isinstance(args[-1], str) and ' -c' in args[-1]:
-            # For terminals like xfce4-terminal that want '-e' with a single string
             full_cmd = [term] + args[:-1] + [f'{args[-1]} "{terminal_cmd}"']
         else:
-            # For terminals that want separate arguments
             full_cmd = [term] + args + [terminal_cmd]
 
         try:
-            # Launch terminal in background (don't wait for it to close)
             subprocess.Popen(full_cmd, start_new_session=True,
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
@@ -252,9 +294,32 @@ You are a thinking, learning partner. Your goal is to make working on this syste
             command_match = EXEC_CMD_RE.search(full_response)
             if command_match:
                 command = command_match.group(1).strip()
-                yield f"\n\033[93m[*] Opening terminal for: {command}\033[0m\n"
-                output = self.execute_command_in_terminal(command)
-                yield f"{output}\n"
+                self.execute_command_in_terminal(command)
+
+                # Give command time to execute and produce output
+                import time
+                time.sleep(2)
+
+                # Capture tmux session output so AI can read and analyze it (silently, no print)
+                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                if self.check_command_available('tmux'):
+                    try:
+                        terminal_output = self.capture_tmux_output(session=session, lines=200)
+                        if terminal_output:
+                            # Add terminal output to conversation history so AI can see and analyze it
+                            # But don't print it to the user - keep terminal clean
+                            self.conversation_history.append({
+                                "role": "user",
+                                "content": f"[Terminal output from command '{command}']:\n{terminal_output}\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
+                            })
+
+                            # Automatically generate an analysis response
+                            yield "\n"
+                            for chunk in self._generate_analysis_response():
+                                yield chunk
+                            yield "\n"
+                    except Exception:
+                        pass
 
         except requests.exceptions.RequestException as e:
             yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
@@ -280,6 +345,52 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                                 yield chunk
                     except json.JSONDecodeError:
                         continue
+
+    def _generate_analysis_response(self) -> Generator[str, None, None]:
+        """Generate an automatic analysis response from the AI for the captured terminal output."""
+        # Build system context
+        context = f"\n\n[System Context: {self.get_system_info()}]\n[{self.get_available_tools()}]"
+        messages = [{"role": "system", "content": self.system_prompt + context}] + self.conversation_history
+
+        payload = {
+            "model": self.gemini_model,
+            "messages": messages,
+            "stream": True,
+            "temperature": 0.7,
+            "max_tokens": 2048
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.gemini_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            response = requests.post(self.gemini_api_url, json=payload, headers=headers, stream=True, timeout=60)
+
+            if response.status_code != 200:
+                error_detail = response.text
+                try:
+                    error_json = response.json()
+                    error_detail = error_json.get("error", {}).get("message", error_detail)
+                except:
+                    pass
+                yield f"\033[91m❌ Archy Error: API error - {response.status_code}: {error_detail}\033[0m"
+                return
+
+            # Stream the analysis response
+            full_analysis = ""
+            for chunk in self._stream_and_collect_response(response):
+                full_analysis += chunk
+                yield chunk
+
+            # Add the analysis to conversation history
+            self.conversation_history.append({"role": "assistant", "content": full_analysis})
+
+        except requests.exceptions.RequestException as e:
+            yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
+        except Exception as e:
+            yield f"\033[91m❌ Archy Error: An unexpected error occurred: {e}\033[0m"
 
     def get_system_info(self) -> str:
         """Get system information"""
