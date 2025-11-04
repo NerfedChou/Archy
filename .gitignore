@@ -1,0 +1,18 @@
+ # Ignore local secret files
+.env
+.api
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Virtualenv
+venv/
+.venv/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+

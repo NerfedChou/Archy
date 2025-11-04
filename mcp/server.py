@@ -7,10 +7,20 @@ import shutil
 app = FastAPI()
 
 @app.get("/execute_command/")
-def execute_command(command: str):
+def execute_command(command: str, cwd: str = None):
     try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=cwd
+        )
+
         return {"stdout": result.stdout, "stderr": result.stderr}
+    except subprocess.TimeoutExpired:
+        return {"stdout": "", "stderr": "Command timed out after 30 seconds"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

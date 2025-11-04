@@ -23,43 +23,45 @@ if [[ "$confirm" != "yes" ]]; then
     exit 0
 fi
 
-# Stop systemd service
-echo -e "\n${BLUE}[*] Stopping systemd service...${NC}"
-if systemctl is-active --quiet archy; then
-    sudo systemctl stop archy
-    echo -e "${GREEN}[+] Service stopped${NC}"
+# Stop and disable MCP systemd service
+echo -e "\n${BLUE}[*] Stopping MCP service...${NC}"
+if systemctl is-active --quiet mcp.service; then
+    sudo systemctl stop mcp.service
+    echo -e "${GREEN}[+] MCP service stopped${NC}"
 fi
 
-# Disable systemd service
-echo -e "\n${BLUE}[*] Disabling systemd service...${NC}"
-if systemctl is-enabled --quiet archy 2>/dev/null; then
-    sudo systemctl disable archy
-    echo -e "${GREEN}[+] Service disabled${NC}"
+# Disable MCP systemd service
+echo -e "\n${BLUE}[*] Disabling MCP service...${NC}"
+if systemctl is-enabled --quiet mcp.service 2>/dev/null; then
+    sudo systemctl disable mcp.service
+    echo -e "${GREEN}[+] MCP service disabled${NC}"
 fi
 
-# Remove systemd service file
-echo -e "\n${BLUE}[*] Removing systemd service file...${NC}"
-if [ -f /etc/systemd/system/archy.service ]; then
-    sudo rm /etc/systemd/system/archy.service
+# Remove MCP systemd service file
+echo -e "\n${BLUE}[*] Removing MCP systemd service file...${NC}"
+if [ -f /etc/systemd/system/mcp.service ]; then
+    sudo rm /etc/systemd/system/mcp.service
     sudo systemctl daemon-reload
-    echo -e "${GREEN}[+] Service file removed${NC}"
+    echo -e "${GREEN}[+] MCP service file removed${NC}"
 fi
 
-# Stop and remove Docker containers
-echo -e "\n${BLUE}[*] Stopping Docker containers...${NC}"
-docker-compose down
-echo -e "${GREEN}[+] Docker containers stopped and removed${NC}"
+# Remove MCP installation directory
+echo -e "\n${BLUE}[*] Removing MCP installation...${NC}"
+if [ -d /opt/mcp ]; then
+    sudo rm -rf /opt/mcp
+    echo -e "${GREEN}[+] MCP installation removed${NC}"
+fi
 
-# Remove Docker volume
-echo -e "\n${BLUE}[*] Removing Docker volumes...${NC}"
-docker-compose down -v
-echo -e "${GREEN}[+] Docker volumes removed${NC}"
+# Remove CLI tools (handle symlinks or files)
+echo -e "\n${BLUE}[*] Removing CLI tools...${NC}"
+if [ -L /usr/local/bin/archy ] || [ -f /usr/local/bin/archy ]; then
+    sudo rm -f /usr/local/bin/archy
+    echo -e "${GREEN}[+] archy CLI tool removed${NC}"
+fi
 
-# Remove CLI tool
-echo -e "\n${BLUE}[*] Removing CLI tool...${NC}"
-if [ -f /usr/local/bin/archy ]; then
-    sudo rm /usr/local/bin/archy
-    echo -e "${GREEN}[+] CLI tool removed${NC}"
+if [ -L /usr/local/bin/archy_chat.py ] || [ -f /usr/local/bin/archy_chat.py ]; then
+    sudo rm -f /usr/local/bin/archy_chat.py
+    echo -e "${GREEN}[+] archy_chat.py removed${NC}"
 fi
 
 # Remove Archy data directory (optional)

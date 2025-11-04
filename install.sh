@@ -23,52 +23,80 @@ fi
 # Check prerequisites
 echo -e "\n${BLUE}[*] Checking prerequisites...${NC}"
 
-# Check Docker
-if ! command -v docker &> /dev/null; then
-    echo -e "${RED}[-] Docker is not installed${NC}"
-    echo -e "${YELLOW}[*] Install Docker first: https://docs.docker.com/engine/install/arch/${NC}"
+# Check Python
+if ! command -v python3 &> /dev/null; then
+    echo -e "${RED}[-] Python 3 is not installed${NC}"
     exit 1
 fi
-echo -e "${GREEN}[+] Docker found${NC}"
+echo -e "${GREEN}[+] Python 3 found${NC}"
 
-# Check Docker Compose
-if ! command -v docker-compose &> /dev/null; then
-    echo -e "${RED}[-] Docker Compose is not installed${NC}"
-    echo -e "${YELLOW}[*] Install Docker Compose: sudo pacman -S docker-compose${NC}"
+# Check curl
+if ! command -v curl &> /dev/null; then
+    echo -e "${RED}[-] curl is not installed${NC}"
     exit 1
 fi
-echo -e "${GREEN}[+] Docker Compose found${NC}"
-
-# Check if user can run docker
-if ! docker ps &> /dev/null; then
-    echo -e "${RED}[-] Cannot run Docker (permission denied)${NC}"
-    echo -e "${YELLOW}[*] Add your user to docker group: sudo usermod -aG docker $USER${NC}"
-    exit 1
-fi
-echo -e "${GREEN}[+] Docker permissions OK${NC}"
+echo -e "${GREEN}[+] curl found${NC}"
 
 # Setup directories
 echo -e "\n${BLUE}[*] Setting up directories...${NC}"
 ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
 mkdir -p "$ARCHY_HOME"
-mkdir -p "$ARCHY_HOME/ollama"
 mkdir -p "$ARCHY_HOME/logs"
 echo -e "${GREEN}[+] Directories created at $ARCHY_HOME${NC}"
 
-# Build Docker image
-echo -e "\n${BLUE}[*] Building Docker image...${NC}"
-docker-compose build
-echo -e "${GREEN}[+] Docker image built${NC}"
+# Setup MCP native installation
+echo -e "\n${BLUE}[*] Setting up native MCP server...${NC}"
+MCP_DIR="/opt/mcp"
+sudo mkdir -p "$MCP_DIR"
+# Use sudo rsync so files in /opt/mcp (possibly owned by root) can be updated/removed
+sudo rsync -a --delete ./mcp/ "$MCP_DIR/"
+# Ensure ownership so the regular user can manage the installation directory
+sudo chown -R "$USER:$(id -gn)" "$MCP_DIR"
 
-# Start services
-echo -e "\n${BLUE}[*] Starting Archy services...${NC}"
-docker-compose up -d
-echo -e "${GREEN}[+] Services started${NC}"
+# Create Python venv for MCP
+cd "$MCP_DIR"
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip --quiet
+python -m pip install --only-binary :all: fastapi uvicorn pydantic requests python-dotenv --quiet
+deactivate
+cd -
 
-# Wait for services to be ready
-echo -e "\n${BLUE}[*] Waiting for services to be ready (this may take a minute)...${NC}"
-for i in {1..60}; do
-    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+# Create systemd service for MCP
+echo -e "${BLUE}[*] Creating MCP systemd service...${NC}"
+sudo tee /etc/systemd/system/mcp.service > /dev/null << 'MCPSERVICE'
+[Unit]
+Description=MCP Service - System Command Executor
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+Group=$(id -gn)
+WorkingDirectory=/opt/mcp
+Environment="PATH=/opt/mcp/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/mcp"
+ExecStart=/opt/mcp/venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+MCPSERVICE
+
+# Enable and start MCP service
+echo -e "${BLUE}[*] Starting MCP service...${NC}"
+sudo systemctl daemon-reload
+sudo systemctl enable mcp.service
+sudo systemctl start mcp.service
+
+# Wait for MCP to be ready
+echo -e "\n${BLUE}[*] Waiting for MCP server to be ready...${NC}"
+for i in {1..30}; do
+    if curl -s http://localhost:8000/system_info/ > /dev/null 2>&1; then
         echo -e "${GREEN}[+] MCP Server is ready${NC}"
         break
     fi
@@ -76,54 +104,40 @@ for i in {1..60}; do
     sleep 1
 done
 
-# Pull Ollama model
-echo -e "\n${BLUE}[*] Pulling Mistral model (this may take a few minutes)...${NC}"
-docker exec archy-ollama ollama pull mistral
-echo -e "${GREEN}[+] Mistral model pulled${NC}"
 
-# Make CLI script executable
-echo -e "\n${BLUE}[*] Setting up CLI...${NC}"
+# Make CLI script executable and install to /usr/local/bin (use symlinks to keep repo version live)
+echo -e "\n${BLUE}[*] Setting up CLI tools (symlinks)...${NC}"
 chmod +x scripts/archy
-sudo cp scripts/archy /usr/local/bin/archy
-echo -e "${GREEN}[+] Archy CLI installed to /usr/local/bin/archy${NC}"
+chmod +x scripts/archy_chat.py
+# Use absolute paths so systemwide symlinks point to the repository copy
+REPO_ROOT="$(pwd)"
+# Remove any existing installed files first to ensure symlink replaces them
+sudo rm -f /usr/local/bin/archy /usr/local/bin/archy_chat.py
+sudo ln -sf "$REPO_ROOT/scripts/archy" /usr/local/bin/archy
+sudo ln -sf "$REPO_ROOT/scripts/archy_chat.py" /usr/local/bin/archy_chat.py
+sudo chmod +x /usr/local/bin/archy
+sudo chmod +x /usr/local/bin/archy_chat.py
+echo -e "${GREEN}[+] Archy CLI tools symlinked to /usr/local/bin (pointing at $REPO_ROOT/scripts)${NC}"
 
-# Create systemd service for auto-start (optional)
-echo -e "\n${BLUE}[*] Setting up auto-start...${NC}"
-ARCHY_PATH="$(pwd)"
-sudo tee /etc/systemd/system/archy.service > /dev/null <<EOF
-[Unit]
-Description=Archy - Local AI Assistant
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=$ARCHY_PATH
-ExecStart=/usr/bin/docker-compose up -d
-ExecStop=/usr/bin/docker-compose down
-RemainAfterExit=yes
-User=$USER
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable archy.service
-echo -e "${GREEN}[+] Systemd service created and enabled${NC}"
+# Update .env if it doesn't have MCP_SERVER
+echo -e "\n${BLUE}[*] Setting up environment configuration...${NC}"
+if ! grep -q '^MCP_SERVER=' .env 2>/dev/null; then
+    echo 'MCP_SERVER=http://localhost:8000' >> .env
+    echo -e "${GREEN}[+] MCP_SERVER configuration added to .env${NC}"
+fi
 
 # Verification
 echo -e "\n${BLUE}[*] Verifying installation...${NC}"
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+if curl -s http://localhost:8000/system_info/ > /dev/null 2>&1; then
     echo -e "${GREEN}[+] MCP Server: OK${NC}"
 else
-    echo -e "${RED}[-] MCP Server: FAILED${NC}"
+    echo -e "${YELLOW}[!] MCP Server: Not yet responding (may need a moment to start)${NC}"
 fi
 
-if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-    echo -e "${GREEN}[+] Ollama: OK${NC}"
+if systemctl is-active --quiet mcp.service; then
+    echo -e "${GREEN}[+] MCP Systemd Service: Active${NC}"
 else
-    echo -e "${RED}[-] Ollama: FAILED${NC}"
+    echo -e "${YELLOW}[!] MCP Systemd Service: Not active${NC}"
 fi
 
 echo -e "\n${BLUE}========================================${NC}"
@@ -131,13 +145,11 @@ echo -e "${GREEN}[+] Archy installation complete!${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 echo -e "\n${GREEN}Quick Start:${NC}"
-echo -e "  archy \"update my system\""
-echo -e "  archy \"what tools are installed?\""
-echo -e "  archy sysinfo"
+echo -e "  archy \"what is my working directory?\""
+echo -e "  archy \"list the files in /home/chef\""
+echo -e "  archy                    # Interactive mode"
 echo -e "\n${GREEN}Service Management:${NC}"
-echo -e "  systemctl start archy"
-echo -e "  systemctl stop archy"
-echo -e "  systemctl status archy"
-echo -e "\n${GREEN}View Logs:${NC}"
-echo -e "  docker-compose logs -f"
+echo -e "  systemctl status mcp.service      # Check MCP status"
+echo -e "  systemctl restart mcp.service     # Restart MCP"
+echo -e "  journalctl -u mcp.service -f      # View MCP logs"
 echo -e "\n${GREEN}For more info: https://github.com/NerfedChou/Archy${NC}\n"

@@ -3,9 +3,36 @@
 # Archy - Local AI Assistant CLI
 # Simple wrapper to interact with Archy AI assistant
 
+# Determine the Archy project directory
+# First try to find it relative to where this script might be installed
+if [[ -f "/home/chef/Archy/.env" ]]; then
+    ARCHY_DIR="/home/chef/Archy"
+elif [[ -f "$HOME/Archy/.env" ]]; then
+    ARCHY_DIR="$HOME/Archy"
+else
+    # Fallback to current directory or script directory
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ARCHY_DIR="$(dirname "$SCRIPT_DIR")"
+fi
+
+# Load .env file if it exists
+if [[ -f "$ARCHY_DIR/.env" ]]; then
+    export $(cat "$ARCHY_DIR/.env" | grep -v '^#' | grep -v '^$' | xargs)
+fi
+
+# Load .api secrets file if it exists (export variables)
+if [[ -f "$ARCHY_DIR/.api" ]]; then
+    # Use a subshell to avoid polluting current shell when source fails
+    set -a
+    # shellcheck disable=SC1090
+    source "$ARCHY_DIR/.api"
+    set +a
+fi
+
 ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
-MCP_SERVER="http://localhost:8000"
+MCP_SERVER="${MCP_SERVER:-http://localhost:8000}"
 GROQ_API_KEY="${GROQ_API_KEY:-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}"
+MODEL_PROVIDER="${MODEL_PROVIDER:-groq}"
 
 # Color codes
 GREEN='\033[0;32m'
@@ -55,7 +82,7 @@ EOF
 if [[ $# -eq 0 ]]; then
     # No arguments: launch interactive chat mode
     print_success "Launching interactive chat..."
-    exec python3 "$(dirname "$0")/archy_chat.py"
+    exec python3 "/usr/local/bin/archy_chat.py"
     exit 0
 fi
 
@@ -68,15 +95,15 @@ case "$1" in
         if [[ $# -eq 1 ]]; then
             # Interactive mode: archy chat
             print_success "Launching interactive chat..."
-            exec python3 "$(dirname "$0")/archy_chat.py"
+            exec python3 "/usr/local/bin/archy_chat.py"
         else
             # Single question mode: archy chat "question"
             shift  # Remove 'chat' from arguments
-            exec python3 "$(dirname "$0")/archy_chat.py" "$@"
+            exec python3 "/usr/local/bin/archy_chat.py" "$@"
         fi
         ;;
     *)
         # Default: treat as question for single-query mode
-        exec python3 "$(dirname "$0")/archy_chat.py" "$@"
+        exec python3 "/usr/local/bin/archy_chat.py" "$@"
         ;;
 esac
