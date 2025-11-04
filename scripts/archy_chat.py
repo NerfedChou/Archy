@@ -52,6 +52,7 @@ class ArchyChat:
         self.mcp_server = os.getenv("MCP_SERVER", "http://localhost:8000")
         self.conversation_history = []
         self.foot_window_opened = False  # Track if foot window has been opened
+        self.terminal_history = []  # Track all terminal outputs for context
 
         # Validate Gemini API key
         if not self.gemini_api_key:
@@ -70,20 +71,41 @@ Your ability to execute real system commands is your superpower. Use it wisely.
 1.  **Identify the Goal:** First, understand what Master Angulo is trying to achieve.
 2.  **Formulate the Command:** Figure out the right command to accomplish the goal.
 3.  **Ask for Confirmation:** For any command that modifies the system (like `sudo`, `pacman`, `rm`, `mv`, `systemctl`), you MUST ask for confirmation first. For simple, read-only commands (`ls`, `pwd`, `nmap`), you can proceed directly.
-4.  **Execute:** Use the `[EXECUTE_COMMAND: your_command_here]` format. Commands will open in a NEW TERMINAL WINDOW where Master Angulo can interact with them directly. Do not use markdown code blocks for commands.
-5.  **Keep it brief:** Since commands open in their own terminal, you don't need to analyze output - Master Angulo will see it directly. Just confirm the command was launched.
+4.  **Execute:** Use the `[EXECUTE_COMMAND: your_command_here]` format. Commands run in a persistent tmux terminal session that Master Angulo can see via the `foot` terminal. Do not use markdown code blocks for commands.
+5.  **Capture & Analyze:** After executing a command, you will automatically receive the terminal output in the conversation. Use this output to:
+   - Analyze results and provide insights
+   - Extract important information (IPs, ports, file lists, etc.)
+   - Summarize findings for Master Angulo
+   - Determine next steps based on actual results
+6.  **Smart Interaction:** Commands run in the SAME persistent terminal. This means:
+   - State is preserved between commands (working directory, environment variables)
+   - You can reference previous command outputs
+   - You can chain logic across multiple commands
+   - You should monitor and understand what's happening in the terminal
+7.  **Master Angulo's Manual Commands:** Master Angulo can also run commands directly in the terminal themselves. When they ask you to "analyze", "see the output", "what happened", "you see what command", or similar questions, the system will IMMEDIATELY capture the entire terminal buffer showing the LIVE current state. This includes:
+   - Commands Master Angulo ran manually (that you didn't execute)
+   - The current working directory
+   - Any output from those commands
+   - The current prompt state
+   You should analyze this LIVE terminal state and answer based on what you actually see there RIGHT NOW.
 
 **Example Interaction Flow:**
 
-**Master Angulo:** "Archy, can you update the system?"
+**Master Angulo:** "Archy, find my IP address"
 
-**Archy:** "Of course, Master Angulo. I'll run `sudo pacman -Syu` in a new terminal. Shall I proceed?"
+**Archy:** "Of course, Master Angulo! I'll get that for you. [EXECUTE_COMMAND: ip a]"
 
-**(If Master Angulo confirms)**
+**(Terminal output is captured and sent back)**
 
-**Archy:** "Great! Opening terminal now. [EXECUTE_COMMAND: sudo pacman -Syu]"
+**Archy:** "Perfect! I can see your IP address is 192.168.1.37 on your wlan0 interface."
 
-**(Command opens in new terminal window where Master Angulo can interact with it)**
+---
+
+**Master Angulo runs manually in terminal:** `nmap 192.168.1.37`
+
+**Master Angulo:** "Archy, what did you find?"
+
+**Archy:** **(Automatically captures terminal buffer)** "I can see the nmap scan you just ran found 3 open ports..."
 
 You are a thinking, learning partner. Your goal is to make working on this system a seamless and collaborative experience."""
 
@@ -98,7 +120,7 @@ You are a thinking, learning partner. Your goal is to make working on this syste
             ('xterm', ['-e', 'bash', '-c']),
             ('urxvt', ['-e', 'bash', '-c']),
             ('terminator', ['-e', 'bash -c']),
-            ('tilix', ['-e', 'bash -c']),
+            ('tilix', ['-e', 'bash', '-c']),
         ]
 
         for term, args in terminals:
@@ -108,23 +130,17 @@ You are a thinking, learning partner. Your goal is to make working on this syste
         return (None, None)
 
     def find_desktop_entry(self, app_name: str) -> Optional[str]:
-        """Search for a .desktop file matching the app name"""
-        # Standard desktop entry directories
+        """Search for a .desktop file matching the app name - EXACT matches only"""
         desktop_dirs = [
             os.path.expanduser('~/.local/share/applications'),
             '/usr/local/share/applications',
             '/usr/share/applications',
             '/usr/share/applications/kde4',
             '/usr/share/applications/kde5',
-        ]
-
-        # Also check custom app locations
-        desktop_dirs.extend([
             os.path.expanduser('~/.config/applications'),
             '/opt/applications',
-        ])
+        ]
 
-        # Search for .desktop files that match the app name
         for desktop_dir in desktop_dirs:
             if not os.path.isdir(desktop_dir):
                 continue
@@ -135,10 +151,27 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                         try:
                             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                                 content = f.read()
-                                # Check if this desktop file matches the app name
-                                if f'Exec={app_name}' in content or f'Exec=/usr/bin/{app_name}' in content or \
-                                   f'Name={app_name}' in content or filename.startswith(app_name):
-                                    return filename.replace('.desktop', '')
+
+                                # ✅ FIXED: Use regex for exact word boundaries
+                                # This ensures "ls" doesn't match "lsotop"
+                                import re
+
+                                # Match Exec line with exact command (word boundary)
+                                exec_patterns = [
+                                    rf'^Exec={re.escape(app_name)}(\s|$)',  # Exec=ls (space or end)
+                                    rf'^Exec=/usr/bin/{re.escape(app_name)}(\s|$)',  # Exec=/usr/bin/ls
+                                    rf'^Exec=.+/bin/{re.escape(app_name)}(\s|$)',  # Any path ending in /bin/ls
+                                ]
+
+                                for pattern in exec_patterns:
+                                    if re.search(pattern, content, re.MULTILINE):
+                                        return filename.replace('.desktop', '')
+
+                                # Check desktop file name matches EXACTLY
+                                desktop_name = filename.replace('.desktop', '')
+                                if desktop_name.lower() == app_name.lower():
+                                    return desktop_name
+
                         except (IOError, OSError):
                             continue
             except (OSError, PermissionError):
@@ -164,6 +197,36 @@ You are a thinking, learning partner. Your goal is to make working on this syste
             return result.stdout if result.returncode == 0 else ""
         except Exception:
             return ""
+
+    def extract_current_directory(self, terminal_output: str) -> Optional[str]:
+        """Extract the current working directory from the terminal prompt"""
+        lines = terminal_output.strip().split('\n')
+        if not lines:
+            return None
+
+        # Look at the last few lines for the prompt
+        for line in reversed(lines[-5:]):
+            # Common prompt patterns: user@host:path$ or user@host ~/path$ or just path$
+            # Extract directory from patterns like:
+            # chef@Developie ~/Downloads$ or [chef@Developie Downloads]$ or ~/path $
+            import re
+
+            # Pattern 1: user@host:path$ (after colon)
+            match = re.search(r':([~\w/.-]+)\s*\$', line)
+            if match:
+                return match.group(1)
+
+            # Pattern 2: user@host path$ (space before path and $)
+            match = re.search(r'\s([~\w/.-]+)\s*\$', line)
+            if match:
+                return match.group(1)
+
+            # Pattern 3: [user@host path]$ (inside brackets)
+            match = re.search(r'\[.*\s([~\w/.-]+)]', line)
+            if match:
+                return match.group(1)
+
+        return None
 
     def execute_command_in_terminal(self, command: str) -> str:
         """Execute a command using background tmux session with foot as the visible frontend.
@@ -216,9 +279,9 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                     subprocess.Popen(['foot', '-e', 'tmux', 'attach', '-t', session],
                                    start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     self.foot_window_opened = True
-                    return f"✓ Opening foot terminal for: {command}"
+                    return f"✓ Command sent to persistent terminal session: {command}"
                 else:
-                    return f"✓ Command sent to existing tmux session for: {command}"
+                    return f"✓ Command sent to persistent terminal session: {command}"
 
             except Exception:
                 # If tmux path fails, fall back to legacy terminal launch
@@ -248,6 +311,29 @@ You are a thinking, learning partner. Your goal is to make working on this syste
 
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
+
+        # Check if user is asking to analyze terminal output or asking what commands were run
+        analyze_keywords = ['analyze', 'what happened', 'see the output', 'show me', 'what did',
+                           'look at', 'check the', 'read the', 'you see', 'can you see',
+                           'what command', 'did i run', 'what i', 'see what']
+        should_capture = any(keyword in user_input.lower() for keyword in analyze_keywords)
+
+        # ALWAYS capture terminal output when user asks questions (real-time capture)
+        if should_capture:
+            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+            if self.check_command_available('tmux'):
+                try:
+                    import time
+                    # Small delay to ensure terminal has flushed output
+                    time.sleep(0.3)
+                    # Capture the entire terminal buffer (up to 1000 lines) RIGHT NOW
+                    terminal_output = self.capture_tmux_output(session=session, lines=1000)
+                    if terminal_output:
+                        # Prepend the CURRENT terminal state to the user's message
+                        user_input = f"[Current terminal buffer - captured just now]:\n{terminal_output}\n\n[User's question]: {user_input}\n\nNote: This is the LIVE terminal state right now, including any commands Master Angulo ran manually."
+                except Exception:
+                    pass
+
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_input})
 
@@ -296,21 +382,77 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                 command = command_match.group(1).strip()
                 self.execute_command_in_terminal(command)
 
-                # Give command time to execute and produce output
-                import time
-                time.sleep(2)
-
                 # Capture tmux session output so AI can read and analyze it (silently, no print)
                 session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
                 if self.check_command_available('tmux'):
                     try:
-                        terminal_output = self.capture_tmux_output(session=session, lines=200)
+                        import time
+
+                        # For sudo commands or long-running commands, wait longer and poll multiple times
+                        is_sudo_or_long = any(keyword in command.lower() for keyword in ['sudo', 'pacman', 'apt', 'yum', 'nmap', 'make', 'cargo'])
+
+                        if is_sudo_or_long:
+                            # Long-running command: wait up to 30 seconds, polling every 2 seconds
+                            terminal_output = ""
+                            last_output = ""
+
+                            for attempt in range(15):  # 15 attempts * 2 seconds = up to 30 seconds
+                                time.sleep(2)
+                                current_output = self.capture_tmux_output(session=session, lines=500)
+
+                                if current_output:
+                                    terminal_output = current_output
+
+                                    # Check if the command has finished (prompt returned)
+                                    # Look for shell prompt patterns at the end
+                                    if any(prompt in terminal_output.split('\n')[-1] for prompt in ['$', '#', '❯', '~']):
+                                        # Prompt detected, command likely finished
+                                        break
+
+                                    # If output hasn't changed for 2 checks, it's probably done
+                                    if current_output == last_output:
+                                        break
+
+                                    last_output = current_output
+                        else:
+                            # Quick command: wait just a bit longer (3 seconds)
+                            time.sleep(3)
+                            terminal_output = self.capture_tmux_output(session=session, lines=200)
+
                         if terminal_output:
+                            # Store in terminal history for context
+                            self.terminal_history.append({
+                                "command": command,
+                                "output": terminal_output
+                            })
+
+                            # Extract current working directory from the prompt
+                            current_dir = self.extract_current_directory(terminal_output)
+                            dir_info = f" (executed in: {current_dir})" if current_dir else ""
+
+                            # Build context from recent terminal history (last 5 commands)
+                            history_context = ""
+                            if len(self.terminal_history) > 1:
+                                history_context = "\n\n[Previous terminal outputs for context]:\n"
+                                for item in self.terminal_history[-5:]:  # Last 5 commands
+                                    history_context += f"\nCommand: {item['command']}\n---\n{item['output'][:500]}...\n---\n" if len(item['output']) > 500 else f"\nCommand: {item['command']}\n---\n{item['output']}\n---\n"
+
                             # Add terminal output to conversation history so AI can see and analyze it
                             # But don't print it to the user - keep terminal clean
+                            analysis_prompt = f"[Terminal output from command '{command}'{dir_info}]:\n{terminal_output}"
+                            if history_context:
+                                analysis_prompt += history_context
+                            analysis_prompt += "\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
+                            if len(self.terminal_history) > 1:
+                                analysis_prompt += " You can also reference previous outputs if relevant to understand the context or changes."
+
+                            # Add extra context about directory changes
+                            if current_dir:
+                                analysis_prompt += f"\n\n[Important: The command was executed in directory: {current_dir}. This is the CURRENT working directory in the terminal.]"
+
                             self.conversation_history.append({
                                 "role": "user",
-                                "content": f"[Terminal output from command '{command}']:\n{terminal_output}\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
+                                "content": analysis_prompt
                             })
 
                             # Automatically generate an analysis response
@@ -318,7 +460,7 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                             for chunk in self._generate_analysis_response():
                                 yield chunk
                             yield "\n"
-                    except Exception:
+                    except Exception as e:
                         pass
 
         except requests.exceptions.RequestException as e:
@@ -414,6 +556,18 @@ You are a thinking, learning partner. Your goal is to make working on this syste
         available = [tool for tool in tools if self.check_command_available(tool)]
         return f"Available tools: {', '.join(available) if available else 'None detected'}"
 
+    def get_terminal_history(self) -> str:
+        """Get formatted terminal history"""
+        if not self.terminal_history:
+            return "No terminal history yet."
+
+        history_str = "\n\033[93m=== Terminal History ===\033[0m\n"
+        for idx, item in enumerate(self.terminal_history, 1):
+            history_str += f"\n\033[94m[{idx}] Command: {item['command']}\033[0m\n"
+            output_preview = item['output'][:300] + "..." if len(item['output']) > 300 else item['output']
+            history_str += f"{output_preview}\n"
+        return history_str
+
     def show_greeting(self):
         """Show custom greeting"""
         print("\n" + "=" * 70)
@@ -430,7 +584,8 @@ You are a thinking, learning partner. Your goal is to make working on this syste
         print("  • Type 'quit' or 'exit' to leave")
         print("  • Type 'clear' to reset conversation history")
         print("  • Type 'tools' to list available system tools")
-        print("  • Type 'sysinfo' to show system information\n")
+        print("  • Type 'sysinfo' to show system information")
+        print("  • Type 'history' to view all terminal outputs\n")
 
     def run_interactive(self):
         """Run interactive chat loop"""
@@ -456,6 +611,10 @@ You are a thinking, learning partner. Your goal is to make working on this syste
 
                 if user_input.lower() == 'sysinfo':
                     print(f"\033[93m{self.get_system_info()}\033[0m\n")
+                    continue
+
+                if user_input.lower() == 'history':
+                    print(self.get_terminal_history())
                     continue
 
                 if user_input.lower() in ['quit', 'exit']:
