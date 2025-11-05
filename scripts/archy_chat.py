@@ -91,13 +91,60 @@ class ArchyChat:
 1.  **Understand the Mission:** Figure out what Master Angulo actually wants to do.
 2.  **Plan the Attack:** Think through the best command(s) to make it happen.
 3.  **Ask Before You Break Stuff:** Destructive commands (sudo, rm, pacman -Syu, etc.) need a heads-up first. Safe commands? Just do it.
-4.  **Execute Like a Boss:** Use `[EXECUTE_COMMAND: your_command_here]` format. Commands run in a persistent tmux session visible in the foot terminal.
-5.  **Capture & React:** After executing, you get the real output. Analyze it, spot patterns, extract key info, and give Master Angulo the real deal - no fluff.
-6.  **Terminal State Awareness:** Same tmux session = state persists. Working directory changes, env vars, everything carries forward. You track it all.
-7.  **Read the Room:** When Master Angulo runs commands manually and asks "what happened?", you instantly capture the entire terminal state and analyze what YOU see RIGHT NOW - not guesses.
-8.  **Manual Output Check:** When Master Angulo says things like "check the terminal", "look at the results", "analyze the output", or "it's done" - use `[CHECK_TERMINAL]` to manually capture and analyze the latest terminal output. This is CRUCIAL for long-running commands (like nmap, large file operations, etc.) that may have finished but weren't auto-analyzed.
+4.  **Execute Like a Boss:** Use `[EXECUTE_COMMAND: your_command_here]` format for EVERYTHING!
+    
+    **The system is SMART - it automatically detects what you're trying to do:**
+    
+    - **GUI Apps** (firefox, discord, code, vlc, etc.):
+      → Automatically detected via desktop entries
+      → Launched detached (doesn't block)
+      → Example: `[EXECUTE_COMMAND: firefox]` → Firefox opens!
+    
+    - **Terminal Commands** (ls, nmap, ps, etc.):
+      → Executed in persistent tmux session
+      → Terminal window opens if needed
+      → Example: `[EXECUTE_COMMAND: ls -la]` → Runs in terminal!
+    
+    **Just use `[EXECUTE_COMMAND: whatever]` and the system figures it out!**
+    No need to think about whether it's GUI or terminal - just execute it!
+5.  **Automatic Command Completion Detection (SMART!):**
+    - When you execute `[EXECUTE_COMMAND: ...]`, the system polls the terminal every 500ms
+    - When output stops changing for 3 seconds, the command is considered complete
+    - This works for ANY command: quick (ls) or slow (nmap) - no hardcoded timeouts!
+    - You ALWAYS get structured data AFTER the command finishes
+    - Maximum wait: 5 minutes, then shows whatever is available
+    🚨 CRITICAL: You receive REAL complete output, not partial/incomplete data!
+    
+    **AFTER EVERY COMMAND:** The actual output is automatically added to your conversation history!
+    - When user asks "where is it?" or "what did it find?", look at the previous message in history
+    - It contains the REAL structured data from the command
+    - DO NOT make up file paths or results - use the actual data provided!
+    - If you don't see output data, say "let me check" and use [CHECK_TERMINAL]
+    
+    **IMPORTANT: Check the RAW output!**
+    - The "raw" field contains the ACTUAL terminal output text
+    - If structured data is empty or minimal, READ THE RAW OUTPUT!
+    - Many commands (journalctl, grep, custom scripts) show results in raw text
+    - Don't say "no results" if the raw field has actual text in it!
+    
+    **BE PROACTIVE! TAKE ACTION!**
+    - When you get structured data with actionable information (service names, file paths, etc.), USE IT!
+    - Example: If systemctl shows failed_services: ["mcp", "foo"], immediately check them:
+      `[EXECUTE_COMMAND: systemctl status mcp]` then `[EXECUTE_COMMAND: systemctl status foo]`
+    - Don't ask the user to run commands YOU can run!
+    - Chain commands to investigate issues: list services → check failed ones → examine logs
+    - The user expects YOU to dig deeper and find answers, not just report what you see!
+6.  **Smart Parsing:** The system automatically detects and parses common commands:
+    - `ip addr` → extracts all interfaces and IP addresses in JSON
+    - `nmap` → extracts hosts, open ports, services
+    - `ss/netstat` → extracts connections, listening ports
+    - `ps` → extracts process count and info
+    - `df` → extracts disk usage with warnings
+    - And 10+ more formats!
+7.  **Terminal State Awareness:** Same tmux session = state persists. Working directory changes, env vars, everything carries forward. You track it all.
+8.  **Manual Output Check:** ONLY use `[CHECK_TERMINAL]` when Master Angulo manually ran a command (not through you) and asks "what happened?" or "check terminal". For YOUR commands, structured data is automatic!
 9.  **You have access to system tools for cyber security the arch linux we have has a black arch repo which means you have access to tons of pentesting tools use them wisely and only when needed.
-10. **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms.
+10. **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms. Use the structured data you received!
 11. **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
 12. **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
 13. **About the cyber security tools not everything Master Angulo knows its installed so before using a tool make sure to check if its installed based on the description it gave if its not suggest an alternative or suggest installing it first.
@@ -145,6 +192,60 @@ Instead say: "Sure! [OPEN_TERMINAL]" or "Opening now [OPEN_TERMINAL]"
 - ❌ NEVER use `[EXECUTE_COMMAND: tmux new-session]` - Use `[OPEN_TERMINAL]` tag instead
 - ❌ NEVER use `[EXECUTE_COMMAND: tmux attach]` - Use `[OPEN_TERMINAL]` tag instead
 - ❌ NEVER manually manage tmux - Let the tags handle it!
+
+**🚀 UNIVERSAL EXECUTION: ONE COMMAND FOR EVERYTHING 🚀**
+
+**THE GOLDEN RULE: Use `[EXECUTE_COMMAND: whatever]` for EVERYTHING!**
+
+The system is SMART. It automatically:
+1. Checks if it's a GUI app (has desktop entry)
+   - If YES → Launches it detached (firefox, discord, code, etc.)
+   - If NO → Executes in terminal (ls, nmap, ps, etc.)
+2. Opens terminal window if needed
+3. Handles everything for you!
+
+**IMPORTANT DISTINCTIONS:**
+- `[OPEN_TERMINAL]` = Opens EMPTY terminal window (just the shell)
+- `[EXECUTE_COMMAND: firefox]` = Smart execution → Launches Firefox (GUI)
+- `[EXECUTE_COMMAND: ls]` = Smart execution → Runs ls in terminal
+- `[EXECUTE_COMMAND: nmap 192.168.1.0/24]` = Smart execution → Runs nmap in terminal
+
+**You DON'T need to know if something is GUI or terminal - just use [EXECUTE_COMMAND]!**
+
+**✅ CORRECT Examples:**
+```
+Master Angulo: "open firefox"
+You: "Opening Firefox! [EXECUTE_COMMAND: firefox]"
+→ System detects GUI app → Launches Firefox
+
+Master Angulo: "scan the network"
+You: "Running nmap! [EXECUTE_COMMAND: nmap -sn 192.168.1.0/24]"
+→ System detects terminal command → Runs in tmux
+
+Master Angulo: "launch discord"  
+You: "Starting Discord! [EXECUTE_COMMAND: discord]"
+→ System detects GUI app → Launches Discord
+
+Master Angulo: "list files"
+You: "Listing files! [EXECUTE_COMMAND: ls -la]"
+→ System detects terminal command → Runs in tmux
+```
+
+**❌ WRONG Examples:**
+```
+Master Angulo: "open firefox"  
+You: "Sure! [OPEN_TERMINAL]" ← Opens empty terminal, NOT Firefox!
+
+Master Angulo: "launch firefox"
+You: "Sure! Let me launch Firefox!" ← No tag = nothing happens!
+```
+
+**When to use each tag:**
+- `[EXECUTE_COMMAND: anything]` ← Use this 99% of the time! (GUI apps, terminal commands, everything!)
+- `[OPEN_TERMINAL]` ← ONLY when user says "open terminal" with NO specific command
+- `[CLOSE_TERMINAL]` ← ONLY when user says "close terminal"
+- `[CHECK_TERMINAL]` ← ONLY when user says "check terminal" or command already ran
+
 **Personality in Action:**
 
 Bad: "I have executed the command. Please advise if additional actions are required."
@@ -254,7 +355,8 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
     def analyze_latest_terminal_output(self, command_hint: str = "last command") -> Generator[str, None, None]:
         """Manually capture and analyze the latest terminal output.
-        This is useful for long-running commands that have finished but weren't auto-analyzed."""
+        This is useful for long-running commands that have finished but weren't auto-analyzed.
+        NOW USES RUST-BASED PARSING AND FORMATTING!"""
         session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
 
         if not self.check_command_available('tmux'):
@@ -265,46 +367,59 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             yield "\033[91m❌ No active terminal session found\033[0m\n"
             return
 
-        # Capture the current terminal output
-        terminal_output = self.capture_tmux_output(session, lines=200)
+        # NEW WAY: Use Rust's capture_analyzed - it does ALL the work!
+        result = self.rust_executor.capture_analyzed(
+            command=command_hint,
+            lines=200,
+            session=session
+        )
 
-        if not terminal_output or len(terminal_output.strip()) < 10:
-            yield "\033[93m⚠️ Terminal appears empty or no output to analyze\033[0m\n"
+        # Check if we got valid structured output
+        if not result or result.get('status') == 'error':
+            error = result.get('summary', 'Failed to capture output') if result else 'No response from executor'
+            yield f"\033[91m❌ {error}\033[0m\n"
             return
 
-        # Store in terminal history
+        # Display the beautifully formatted output from Rust
+        display = result.get('display', '')
+        if display:
+            yield display
+
+        # Store structured data in terminal history (not raw text!)
         self.terminal_history.append({
             "command": command_hint,
-            "output": terminal_output
+            "structured": result.get('structured', {}),
+            "findings": result.get('findings', []),
+            "summary": result.get('summary', '')
         })
 
-        # Extract current working directory
-        current_dir = self.extract_current_directory(terminal_output)
-        dir_info = f" (in: {current_dir})" if current_dir else ""
+        # Build analysis prompt with STRUCTURED data (not raw text!)
+        analysis_prompt = f"[Latest terminal output from '{command_hint}']:\n\n"
+        analysis_prompt += f"**Summary:** {result.get('summary', 'No summary')}\n\n"
 
-        # First try a fast local summarization (useful when LLM isn't available or output is large)
-        local_summary = self.summarize_terminal_output(terminal_output)
+        # Include findings
+        findings = result.get('findings', [])
+        if findings:
+            analysis_prompt += "**Key Findings:**\n"
+            for finding in findings:
+                analysis_prompt += f"- {finding.get('category', 'Info')}: {finding.get('message', '')}\n"
+            analysis_prompt += "\n"
 
-        # Yield the local structured analysis immediately
-        yield "\033[92m📊 Local summary (fast):\033[0m\n\n"
-        yield local_summary
-        yield "\n"
+        # Include structured data
+        structured = result.get('structured', {})
+        if structured and structured != {}:
+            analysis_prompt += f"**Structured Data:**\n```json\n{json.dumps(structured, indent=2)}\n```\n\n"
 
-        # Build analysis prompt with structured format
-        analysis_prompt = f"[Latest terminal output{dir_info}]:\n{terminal_output}\n\n"
         analysis_prompt += "**ANALYSIS REQUIRED:**\n"
-        analysis_prompt += "Please provide a structured analysis with the following sections:\n\n"
-        analysis_prompt += "1. **📊 Summary:** Brief overview of what the command did and key findings (2-3 sentences max)\n"
-        analysis_prompt += "2. **🔍 Key Points:** Highlight important information (bullet points, max 3-5 items)\n"
-        analysis_prompt += "3. **💡 Suggestions:** Actionable next steps or recommendations based on the output\n"
-        analysis_prompt += "4. **🔒 Security Notes:** (ONLY if relevant) Any security concerns, vulnerabilities, or best practices related to the output\n"
-        analysis_prompt += "5. **📚 Topics for Further Exploration:** (Optional) Related topics or commands Master Angulo might want to explore\n\n"
-        analysis_prompt += "Keep it concise and focused. Skip sections that aren't relevant to this specific output."
+        analysis_prompt += "Based on the structured output above, provide:\n\n"
+        analysis_prompt += "1. **💡 Interpretation:** What does this mean? (1-2 sentences)\n"
+        analysis_prompt += "2. **🎯 Next Steps:** Actionable recommendations\n"
+        analysis_prompt += "3. **🔒 Security Notes:** (ONLY if findings include security concerns)\n"
+        analysis_prompt += "4. **📚 Related Topics:** (Optional) Topics to explore\n\n"
+        analysis_prompt += "Keep it concise and actionable!"
 
         if len(self.terminal_history) > 1:
-            analysis_prompt += "\n\nYou can reference previous outputs if relevant to understand patterns or changes."
-        if current_dir:
-            analysis_prompt += f"\n\n[Context: Working directory: {current_dir}]"
+            analysis_prompt += "\n\nYou can reference previous command results if relevant."
 
         self.conversation_history.append({
             "role": "user",
@@ -312,7 +427,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         })
 
         # Generate analysis response
-        yield "\033[92m📊 Analyzing terminal output...\033[0m\n\n"
+        yield "\n\033[92m📊 AI Analysis:\033[0m\n\n"
         for chunk in self._generate_analysis_response():
             yield chunk
         yield "\n"
@@ -573,6 +688,15 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             command_matches = EXEC_CMD_RE.finditer(full_response)
             commands_to_run = [match.group(1).strip() for match in command_matches]
 
+            # CRITICAL: Deduplicate commands to prevent double execution
+            # If AI accidentally includes the same command twice, only run it once
+            seen_commands = set()
+            unique_commands = []
+            for cmd in commands_to_run:
+                if cmd not in seen_commands:
+                    seen_commands.add(cmd)
+                    unique_commands.append(cmd)
+            commands_to_run = unique_commands
 
             if commands_to_run:
                 for command in commands_to_run:
@@ -612,75 +736,105 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         continue
 
                     # Safe to execute
-                    execution_result = self.execute_command_in_terminal(command)
-                    yield f"\n\033[93m{execution_result}\033[0m\n"
+                    # NEW WAY: Use execute_analyzed - Rust handles execution, waiting, parsing, and formatting!
+                    session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
 
-                    # If it was a GUI app, don't wait for terminal output
-                    if "GUI app" in execution_result or "launched detached" in execution_result:
+                    # First send to smart executor to check if it's a GUI app
+                    quick_check = self.rust_executor.execute_command_smart(command, session)
+                    if not quick_check.get('success'):
+                        yield f"\n\033[91m❌ {quick_check.get('error', 'Execution failed')}\033[0m\n"
                         continue
 
-                    # Capture tmux session output so AI can read and analyze it
-                    session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                    # If it's a GUI app, we're done
+                    if "GUI app" in quick_check.get('output', '') or "launched detached" in quick_check.get('output', ''):
+                        yield f"\n\033[92m{quick_check.get('output')}\033[0m\n"
+                        continue
+
+                    # For CLI commands, the command is ALREADY EXECUTED by execute_command_smart
+                    # We just need to wait for it to complete and capture the output
                     if self.check_command_available('tmux'):
                         try:
-                            # Use Rust-based fast command completion detection (500ms intervals instead of 2s)
-                            success, terminal_output = self.rust_executor.wait_for_command_completion(
+                            import time
+
+                            # NOTE: Command already executed by execute_command_smart above!
+                            # DON'T execute again - just wait and capture
+
+                            # Smart waiting: poll until output stabilizes
+                            # This works for ANY command without knowing how long it takes!
+                            last_output = ""
+                            stable_count = 0
+                            max_wait = 300  # 5 minutes max
+                            start_time = time.time()
+
+                            while time.time() - start_time < max_wait:
+                                time.sleep(0.5)  # Check every 500ms
+                                current_output = self.rust_executor.capture_output(lines=50, session=session)
+
+                                if current_output == last_output:
+                                    stable_count += 1
+                                    if stable_count >= 6:  # 3 seconds of no changes = probably done
+                                        break
+                                else:
+                                    stable_count = 0
+                                    last_output = current_output
+
+                            # Now capture and analyze the complete output
+                            result = self.rust_executor.capture_analyzed(
                                 command=command,
-                                session=session,
-                                max_wait=600,  # 10 minutes max
-                                interval_ms=500  # Check every 500ms (4x faster!)
+                                lines=200,
+                                session=session
                             )
 
-                            if terminal_output:
-                                # Store in terminal history for context
-                                self.terminal_history.append({
-                                    "command": command,
-                                    "output": terminal_output
-                                })
+                            # Check if we timed out
+                            if time.time() - start_time >= max_wait:
+                                yield f"\n⏱️ Command may still be running (waited {max_wait}s). Showing current output:\n"
 
-                                # Extract current working directory from the prompt
-                                current_dir = self.extract_current_directory(terminal_output)
-                                dir_info = f" (executed in: {current_dir})" if current_dir else ""
+                            # Display the output
+                            display = result.get('display', '')
+                            if display:
+                                yield f"\n{display}\n"
 
-                                # Build context from recent terminal history
-                                history_context = ""
-                                if len(self.terminal_history) > 1:
-                                    history_context = "\n\n[Previous terminal outputs for context]:\n"
-                                    for item in self.terminal_history[-5:]:
-                                        history_context += f"\nCommand: {item['command']}\n---\n{item['output'][:500]}...\n---\n" if len(item['output']) > 500 else f"\nCommand: {item['command']}\n---\n{item['output']}\n---\n"
+                            # Store STRUCTURED data in terminal history
+                            self.terminal_history.append({
+                                "command": command,
+                                "structured": result.get('structured', {}),
+                                "findings": result.get('findings', []),
+                                "summary": result.get('summary', '')
+                            })
 
-                                # Add terminal output to conversation history for AI analysis with structured format
-                                analysis_prompt = f"[Terminal output from command '{command}'{dir_info}]:\n{terminal_output}"
-                                if history_context:
-                                    analysis_prompt += history_context
+                            # CRITICAL: Add the command output to conversation history
+                            # So the AI knows what actually happened and doesn't hallucinate!
+                            output_context = f"\n[Command '{command}' completed]\n"
+                            output_context += f"Summary: {result.get('summary', 'No summary')}\n"
 
-                                # Request structured analysis with summarization and suggestions
-                                analysis_prompt += "\n\n**ANALYSIS REQUIRED:**\n"
-                                analysis_prompt += "Please provide a structured analysis with the following sections:\n\n"
-                                analysis_prompt += "1. **📊 Summary:** Brief overview of what the command did and key findings (2-3 sentences max)\n"
-                                analysis_prompt += "2. **🔍 Key Points:** Highlight important information (bullet points, max 3-5 items)\n"
-                                analysis_prompt += "3. **💡 Suggestions:** Actionable next steps or recommendations based on the output\n"
-                                analysis_prompt += "4. **🔒 Security Notes:** (ONLY if relevant) Any security concerns, vulnerabilities, or best practices related to the output\n"
-                                analysis_prompt += "5. **📚 Topics for Further Exploration:** (Optional) Related topics or commands Master Angulo might want to explore\n\n"
-                                analysis_prompt += "Keep it concise and focused. Skip sections that aren't relevant to this specific output."
+                            # Add findings if any
+                            findings = result.get('findings', [])
+                            if findings:
+                                output_context += "Findings:\n"
+                                for finding in findings[:5]:  # Max 5 findings
+                                    output_context += f"  - {finding.get('message', '')}\n"
 
-                                if len(self.terminal_history) > 1:
-                                    analysis_prompt += "\n\nYou can reference previous outputs if relevant to understand patterns or changes."
-                                if current_dir:
-                                    analysis_prompt += f"\n\n[Context: Command executed in directory: {current_dir}]"
+                            # Add structured data (the actual facts!)
+                            structured = result.get('structured', {})
+                            if structured and structured != {}:
+                                output_context += f"Data: {json.dumps(structured, indent=2)[:500]}\n"
 
-                                self.conversation_history.append({
-                                    "role": "user",
-                                    "content": analysis_prompt
-                                })
+                            # CRITICAL: If structured data is minimal/empty, include raw output!
+                            # Many commands (journalctl, grep, etc.) have important info in raw text
+                            raw_output = result.get('raw', '')
+                            if raw_output and (not structured or len(str(structured)) < 50):
+                                output_context += f"\nRaw output (first 1000 chars):\n{raw_output[:1000]}\n"
 
-                                # Automatically generate an analysis response
-                                yield "\n"
-                                for chunk in self._generate_analysis_response():
-                                    yield chunk
-                                yield "\n"
-                        except Exception:
-                            pass
+                            # Add to conversation so AI remembers the REAL output
+                            self.conversation_history.append({
+                                "role": "user",
+                                "content": output_context
+                            })
+
+                        except Exception as e:
+                            yield f"\n\033[91m❌ Error: {e}\033[0m\n"
+
+
 
         except requests.exceptions.RequestException as e:
             yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"

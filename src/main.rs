@@ -6,6 +6,13 @@ use serde_json;
 use std::fs;
 use std::path::PathBuf;
 
+// New modules for complete architecture
+mod formatter;
+mod parser;
+mod output;
+
+use output::DisplayOutput;
+
 #[derive(Deserialize)]
 struct Request {
     action: String,
@@ -58,7 +65,10 @@ fn handle_client(mut stream: UnixStream) -> std::io::Result<()> {
 
     let response = match request.action.as_str() {
         "execute" => execute_command(&request.data),
+        "execute_analyzed" => return handle_execute_analyzed(&mut stream, &request.data),
+        "execute_and_wait" => return handle_execute_and_wait(&mut stream, &request.data),
         "capture" => capture_tmux_output(&request.data),
+        "capture_analyzed" => return handle_capture_analyzed(&mut stream, &request.data),
         "check_session" => check_tmux_session(),
         "open_terminal" => open_terminal(),
         "close_terminal" => close_terminal(),
@@ -1039,5 +1049,151 @@ fn execute_command_smart(data: &serde_json::Value) -> Response {
         error: Some("No execution method available".to_string()),
         exists: None,
     }
+}
+
+/// Handle execute_analyzed action - executes command, waits, and returns analyzed output
+fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) -> std::io::Result<()> {
+    let command = match data.get("command").and_then(|v| v.as_str()) {
+        Some(cmd) => cmd,
+        None => {
+            let output = DisplayOutput::from_error("", "Missing command parameter");
+            let json = serde_json::to_string(&output).unwrap();
+            stream.write_all(json.as_bytes())?;
+            return Ok(());
+        }
+    };
+
+    let session = data.get("session")
+        .and_then(|v| v.as_str())
+        .unwrap_or("archy_session");
+
+    // Execute command in tmux
+    let exec_result = Command::new("tmux")
+        .args(&["send-keys", "-t", session, command, "C-m"])
+        .output();
+
+    if let Err(e) = exec_result {
+        let output = DisplayOutput::from_error(command, &e.to_string());
+        let json = serde_json::to_string(&output).unwrap();
+        stream.write_all(json.as_bytes())?;
+        return Ok(());
+    }
+
+    // Wait for command completion
+    let wait_data = serde_json::json!({
+        "session": session,
+        "command": command,
+        "max_wait": data.get("max_wait").and_then(|v| v.as_u64()).unwrap_or(600),
+        "interval_ms": data.get("interval_ms").and_then(|v| v.as_u64()).unwrap_or(500)
+    });
+
+    let wait_result = wait_for_command_completion(&wait_data);
+
+    let display_output = if wait_result.success {
+        if let Some(raw_output) = wait_result.output {
+            DisplayOutput::from_command_output(command, &raw_output, 0)
+        } else {
+            DisplayOutput::from_error(command, "No output captured")
+        }
+    } else {
+        let partial = wait_result.output.unwrap_or_default();
+        DisplayOutput::from_timeout(command, &partial)
+    };
+
+    let json = serde_json::to_string(&display_output).unwrap();
+    stream.write_all(json.as_bytes())?;
+    Ok(())
+}
+
+/// Handle capture_analyzed action - captures current output and returns analyzed version
+fn handle_capture_analyzed(stream: &mut UnixStream, data: &serde_json::Value) -> std::io::Result<()> {
+    let lines = data.get("lines")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100);
+
+    let session = data.get("session")
+        .and_then(|v| v.as_str())
+        .unwrap_or("archy_session");
+
+    let command = data.get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    // Capture output from tmux
+    let output = Command::new("tmux")
+        .args(&["capture-pane", "-pt", session, "-S", &format!("-{}", lines)])
+        .output();
+
+    let display_output = match output {
+        Ok(out) if out.status.success() => {
+            let raw_output = String::from_utf8_lossy(&out.stdout).to_string();
+            DisplayOutput::from_command_output(command, &raw_output, 0)
+        }
+        Ok(_) => {
+            DisplayOutput::from_error(command, "Failed to capture output")
+        }
+        Err(e) => {
+            DisplayOutput::from_error(command, &e.to_string())
+        }
+    };
+
+    let json = serde_json::to_string(&display_output).unwrap();
+    stream.write_all(json.as_bytes())?;
+    Ok(())
+}
+
+/// Handle execute_and_wait - executes command, waits for completion, then analyzes
+/// This is the SMART way - no hardcoded timeouts!
+fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) -> std::io::Result<()> {
+    let command = match data.get("command").and_then(|v| v.as_str()) {
+        Some(cmd) => cmd,
+        None => {
+            let output = DisplayOutput::from_error("", "Missing command parameter");
+            let json = serde_json::to_string(&output).unwrap();
+            stream.write_all(json.as_bytes())?;
+            return Ok(());
+        }
+    };
+
+    let session = data.get("session")
+        .and_then(|v| v.as_str())
+        .unwrap_or("archy_session");
+
+    // Execute command in tmux
+    let exec_result = Command::new("tmux")
+        .args(&["send-keys", "-t", session, command, "C-m"])
+        .output();
+
+    if let Err(e) = exec_result {
+        let output = DisplayOutput::from_error(command, &e.to_string());
+        let json = serde_json::to_string(&output).unwrap();
+        stream.write_all(json.as_bytes())?;
+        return Ok(());
+    }
+
+    // Wait for command completion using smart prompt detection
+    let wait_data = serde_json::json!({
+        "session": session,
+        "command": command,
+        "max_wait": data.get("max_wait").and_then(|v| v.as_u64()).unwrap_or(300),  // Default 5 minutes
+        "interval_ms": data.get("interval_ms").and_then(|v| v.as_u64()).unwrap_or(500)  // Check every 500ms
+    });
+
+    let wait_result = wait_for_command_completion(&wait_data);
+
+    let display_output = if wait_result.success {
+        if let Some(raw_output) = wait_result.output {
+            DisplayOutput::from_command_output(command, &raw_output, 0)
+        } else {
+            DisplayOutput::from_error(command, "No output captured")
+        }
+    } else {
+        let partial = wait_result.output.unwrap_or_default();
+        DisplayOutput::from_timeout(command, &partial)
+    };
+
+    let json = serde_json::to_string(&display_output).unwrap();
+    stream.write_all(json.as_bytes())?;
+    Ok(())
 }
 

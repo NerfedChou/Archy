@@ -7,7 +7,7 @@ import sys
 import os
 
 # Add scripts directory to path
-sys.path.insert(0, '/home/chef/Archy/scripts')
+sys.path.insert(0, '/scripts')
 
 from rust_executor import RustExecutor
 
