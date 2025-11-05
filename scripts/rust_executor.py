@@ -35,9 +35,17 @@ class RustExecutor:
             message = json.dumps({"action": action, "data": data})
             client.sendall(message.encode())
             
-            response = client.recv(4096).decode()
+            # Receive response in chunks to handle large outputs
+            response_data = b''
+            while True:
+                chunk = client.recv(8192)
+                if not chunk:
+                    break
+                response_data += chunk
+
             client.close()
             
+            response = response_data.decode('utf-8', errors='replace')
             return json.loads(response)
         except FileNotFoundError:
             return {
@@ -149,6 +157,90 @@ class RustExecutor:
     def launch_gui_app(self, desktop_entry: str) -> Dict[str, Any]:
         """Launch a GUI application using its desktop entry."""
         return self.send_command("launch_gui_app", {"desktop_entry": desktop_entry})
+
+    def execute_analyzed(self, command: str, session: str = "archy_session",
+                        max_wait: int = 600, interval_ms: int = 500) -> Dict[str, Any]:
+        """
+        Execute command and return fully analyzed output with:
+        - display: Formatted colored output ready to print
+        - display_plain: Same output without colors
+        - structured: Parsed JSON data
+        - findings: List of key insights
+        - summary: One-line summary
+        - metadata: Stats about the output
+
+        This is the NEW WAY - Rust handles all parsing, formatting, and analysis!
+        Python just consumes the structured data.
+        """
+        return self.send_command("execute_analyzed", {
+            "command": command,
+            "session": session,
+            "max_wait": max_wait,
+            "interval_ms": interval_ms
+        })
+
+    def capture_analyzed(self, command: str = "", lines: int = 100,
+                        session: str = "archy_session") -> Dict[str, Any]:
+        """
+        Capture and analyze current terminal output.
+        Returns the same DisplayOutput structure as execute_analyzed.
+
+        Use this for checking long-running commands or manual command output.
+        """
+        return self.send_command("capture_analyzed", {
+            "command": command,
+            "lines": lines,
+            "session": session
+        })
+
+    def execute_and_wait(self, command: str, session: str = "archy_session",
+                        max_wait: int = 300, interval_ms: int = 500) -> Dict[str, Any]:
+        """
+        Execute command and AUTOMATICALLY wait for it to finish!
+
+        This is the SMART way - no hardcoded sleep times!
+        The Rust daemon monitors the terminal and detects when the prompt returns.
+
+        Perfect for commands that take unknown time:
+        - nmap scans (can take 30+ seconds)
+        - find operations
+        - large file operations
+
+        Args:
+            command: The command to execute
+            session: Tmux session name
+            max_wait: Maximum time to wait in seconds (default 5 minutes)
+            interval_ms: How often to check for completion (default 500ms)
+
+        Returns:
+            DisplayOutput with parsed results when command actually finishes!
+        """
+        return self.send_command("execute_and_wait", {
+            "command": command,
+            "session": session,
+            "max_wait": max_wait,
+            "interval_ms": interval_ms
+        })
+
+    def is_process_running(self, process_name: str) -> bool:
+        """
+        Check if a process is running.
+        Useful for verifying GUI apps launched successfully.
+
+        Args:
+            process_name: Name of the process to check (e.g., 'firefox', 'discord')
+
+        Returns:
+            True if process is running, False otherwise
+        """
+        import subprocess
+        try:
+            result = subprocess.run(['pgrep', '-x', process_name],
+                                  capture_output=True,
+                                  timeout=2)
+            return result.returncode == 0
+        except:
+            return False
 
     def detect_terminal(self) -> Optional[Dict[str, Any]]:
         """Detect available terminal emulator. Returns dict with 'terminal' and 'args'."""

@@ -42,13 +42,18 @@ Archy uses tmux + foot for a single, reusable terminal that it can read, summari
 
 ## Architecture
 
+**NEW: Complete Text Output Migration to Rust!** 🎉
+
 ```
 Gemini API
     ↓
-Python (Brain)
-├─ Conversation history
-├─ System prompt logic
-├─ Command parsing
+Python (Brain)                  Rust (Hands)
+├─ Conversation history    ←→  ├─ Command execution
+├─ AI decision logic           ├─ Intelligent parsing
+├─ Gemini API calls            ├─ Beautiful formatting
+└─ NO TEXT PARSING!            ├─ Finding extraction
+                               ├─ Summary generation
+                               └─ Structured JSON output
 └─ Analysis
     ↓
 [Unix Socket IPC]
@@ -71,12 +76,24 @@ tmux + foot + shell
 - Better error handling at each layer
 
 ## Features
+
+### Core Features
 - **Hybrid Rust + Python architecture** for optimal performance
 - Single, reusable terminal session (tmux backend, foot frontend)
 - Real-time command execution with output capture and summaries
 - Personality-driven responses (casual, helpful, a little witty)
 - Local-first design using your system tools
 - Fast daemon-based executor for system operations
+
+### NEW: Intelligent Output Analysis 🆕
+- **Smart Parsing**: Automatically detects and parses nmap, netstat, ss, ls, df, and more
+- **Beautiful Formatting**: Colored output with tables, icons, and clear sections
+- **Finding Extraction**: Automatically identifies key insights (open ports, errors, etc.)
+- **Security Awareness**: Flags CVEs, weak crypto, authentication failures
+- **Structured Output**: JSON data perfect for AI consumption
+- **Auto Summaries**: One-line summaries of what happened
+
+**See `NEW_ARCHITECTURE.md` for details!**
 
 ## Usage
 ```bash
