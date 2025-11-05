@@ -15,6 +15,9 @@ import importlib
 from typing import Generator, Optional
 from pathlib import Path
 
+# Import Rust executor for system operations
+from rust_executor import RustExecutor
+
 # Try to load environment variables from .env file via importlib to satisfy static checkers
 try:
     _dotenv = importlib.import_module('dotenv')
@@ -50,8 +53,10 @@ class ArchyChat:
         self.gemini_api_url = f"{self.gemini_host.rstrip('/')}/chat/completions"
 
         self.conversation_history = []
-        self.foot_process = None  # Track the actual foot process object (PID)
         self.terminal_history = []  # Track all terminal outputs for context
+
+        # Initialize Rust executor for system operations
+        self.rust_executor = RustExecutor()
 
         # Validate Gemini API key
         if not self.gemini_api_key:
@@ -93,10 +98,52 @@ class ArchyChat:
 7.  **Read the Room:** When Master Angulo runs commands manually and asks "what happened?", you instantly capture the entire terminal state and analyze what YOU see RIGHT NOW - not guesses.
 8.  **You have access to system tools for cyber security the arch linux we have has a black arch repo which means you have access to tons of pentesting tools use them wisely and only when needed.
 9.  **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms.
-10.  **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
-11.  **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
+10. **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
+11. **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
 12. **About the cyber security tools not everything Master Angulo knows its installed so before using a tool make sure to check if its installed based on the description it gave if its not suggest an alternative or suggest installing it first.
 
+**Terminal & Session Management - YOU MUST USE TAGS TO ACT:**
+To open or close the terminal/session, you MUST use these tags. Just talking about it does nothing.
+
+- `[OPEN_TERMINAL]` - Use this when Master Angulo asks to "open terminal", "reopen terminal", or "open it".
+  This works whether a session exists or not - it's smart enough to figure it out.
+- `[CLOSE_TERMINAL]` - Use this when Master Angulo asks to "close terminal" or "close it".
+- `[CLOSE_SESSION]` - Use this when Master Angulo asks to "close session".
+
+**Correct Usage:**
+- User: "open a terminal"
+- You: "Sure thing! Opening it now. [OPEN_TERMINAL]"
+- Result: ✓ The terminal actually opens because you used the tag!
+
+**Incorrect Usage (DO NOT DO THIS):**
+- User: "open a terminal"
+- You: "Okay, I have opened the terminal for you."  (❌ No tag = nothing happens!)
+- Result: ✗ The terminal does NOT open because you forgot the tag!
+
+**KEY RULE:** If you don't use the tag, the action will NOT happen. You MUST include the tag in your response.
+Always use the tag EVERY TIME Master Angulo asks to open/close terminal/session.
+
+**ABOUT TERMINAL & SESSION MANAGEMENT:**
+When Master Angulo asks to open/close terminal/session, DON'T use tags like `[CLOSE_TERMINAL]` or `[CLOSE_SESSION]`.
+These are handled automatically by the Python code when you respond naturally.
+- If Master Angulo says "close terminal" or "close it" → Python handles it automatically, just acknowledge briefly
+- If Master Angulo says "open terminal" → Python handles it automatically, just acknowledge briefly
+- If Master Angulo says "close session" → Python handles it with confirmation, just guide them
+
+**CRITICAL SAFETY RULES (Avoid These Patterns):**
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux kill-session]` - Use natural language "close session" instead!
+- ❌ NEVER use tags like `[CLOSE_TERMINAL]`, `[CLOSE_SESSION]`, `[OPEN_TERMINAL]` - these don't work!
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux kill-session]` - Use natural language "close session" instead!
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux new-session]` - I handle session management automatically!
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux attach]` - Use "open terminal" instead!
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux detach]` - Use "close terminal" instead!
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux send-keys]` - I handle this automatically!
+
+**About `exit`:** It's FINE if Master Angulo wants to run `exit` - it just closes the shell, I stay alive. Just execute it normally without fuss.
+- ❌ DO NOT manually manage tmux sessions with ANY tmux commands!
+
+**WHY:** These commands would execute INSIDE the tmux session, causing deadlocks or unexpected behavior.
+**INSTEAD:** When Master Angulo wants to close the terminal/session, respond with natural language and let the Python code handle it properly through the Rust executor.
 **Personality in Action:**
 
 Bad: "I have executed the command. Please advise if additional actions are required."
@@ -147,156 +194,30 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         return (None, None)
 
     def find_desktop_entry(self, app_name: str) -> Optional[str]:
-        """Search for a .desktop file matching the app name - EXACT matches only"""
-        desktop_dirs = [
-            os.path.expanduser('~/.local/share/applications'),
-            '/usr/local/share/applications',
-            '/usr/share/applications',
-            '/usr/share/applications/kde4',
-            '/usr/share/applications/kde5',
-            os.path.expanduser('~/.config/applications'),
-            '/opt/applications',
-        ]
-
-        for desktop_dir in desktop_dirs:
-            if not os.path.isdir(desktop_dir):
-                continue
-            try:
-                for filename in os.listdir(desktop_dir):
-                    if filename.endswith('.desktop'):
-                        filepath = os.path.join(desktop_dir, filename)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-
-                                # ✅ FIXED: Use regex for exact word boundaries
-                                # This ensures "ls" doesn't match "lsotop"
-                                import re
-
-                                # Match Exec line with exact command (word boundary)
-                                exec_patterns = [
-                                    rf'^Exec={re.escape(app_name)}(\s|$)',  # Exec=ls (space or end)
-                                    rf'^Exec=/usr/bin/{re.escape(app_name)}(\s|$)',  # Exec=/usr/bin/ls
-                                    rf'^Exec=.+/bin/{re.escape(app_name)}(\s|$)',  # Any path ending in /bin/ls
-                                ]
-
-                                for pattern in exec_patterns:
-                                    if re.search(pattern, content, re.MULTILINE):
-                                        return filename.replace('.desktop', '')
-
-                                # Check desktop file name matches EXACTLY
-                                desktop_name = filename.replace('.desktop', '')
-                                if desktop_name.lower() == app_name.lower():
-                                    return desktop_name
-
-                        except (IOError, OSError):
-                            continue
-            except (OSError, PermissionError):
-                continue
-
-        return None
+        """Search for a .desktop file matching the app name - EXACT matches only (via Rust)"""
+        return self.rust_executor.find_desktop_entry(app_name)
 
     def send_command_to_tmux(self, command: str, session: str = "archy_session") -> bool:
-        """Send a command to the tmux session (non-blocking, runs in background)"""
-        try:
-            subprocess.run(['tmux', 'send-keys', '-t', session, command, 'C-m'], check=False)
-            return True
-        except Exception:
-            return False
-
-    def is_foot_running(self) -> bool:
-        """Check if the foot process is still alive"""
-        if self.foot_process is None:
-            return False
-
-        # Check if process is still running
-        try:
-            # poll() returns None if process is still running
-            if self.foot_process.poll() is None:
-                return True
-            else:
-                # Process has terminated
-                self.foot_process = None
-                return False
-        except Exception:
-            return False
+        """Send a command to the tmux session (non-blocking, runs in background) via Rust executor"""
+        result = self.rust_executor.execute_in_tmux(command, session)
+        return result.get("success", False)
 
     def reopen_foot_if_needed(self, session: str = "archy_session") -> bool:
-        """Reopen foot window if it's closed but tmux session still exists"""
-        if self.is_foot_running():
-            return True  # Already open, no need to reopen
-
-        # Foot is closed, reopen it
-        if self.check_command_available('foot'):
-            try:
-                self.foot_process = subprocess.Popen(
-                    ['foot', '-e', 'tmux', 'attach', '-t', session],
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                return True
-            except Exception:
-                return False
-        return False
+        """Reopen foot window if it's closed but tmux session still exists via Rust executor"""
+        return self.rust_executor.open_terminal()
 
     def open_terminal_session(self, session: str = "archy_session") -> bool:
-        """Open a terminal session (tmux + foot) without requiring a command.
+        """Open a terminal session (tmux + foot) via Rust executor.
         Returns True if successful, False otherwise."""
-        try:
-            # Ensure detached tmux session exists
-            has = subprocess.run(['tmux', 'has-session', '-t', session],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if has.returncode != 0:
-                # Session doesn't exist, create it
-                subprocess.run(['tmux', 'new-session', '-d', '-s', session], check=True)
-
-            # Open foot attached to the tmux session (showing full history)
-            if self.check_command_available('foot'):
-                try:
-                    self.foot_process = subprocess.Popen(
-                        ['foot', '-e', 'tmux', 'attach', '-t', session],
-                        start_new_session=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    return True
-                except Exception:
-                    return False
-        except Exception:
-            return False
-        return False
+        return self.rust_executor.open_terminal()
 
     def close_foot_window(self) -> bool:
-        """Close the foot window without killing the tmux session"""
-        try:
-            if self.is_foot_running():
-                try:
-                    self.foot_process.terminate()
-                    self.foot_process.wait(timeout=2)
-                except Exception:
-                    try:
-                        self.foot_process.kill()
-                    except Exception:
-                        pass
-                self.foot_process = None
-                return True
-            return False
-        except Exception:
-            return False
+        """Close the foot window without killing the tmux session via Rust executor"""
+        return self.rust_executor.close_terminal()
 
     def close_tmux_session(self, session: str = "archy_session") -> bool:
-        """Close the tmux session and clean up"""
-        try:
-            # First, kill the foot window if it's still running
-            self.close_foot_window()
-
-            # Then kill the tmux session
-            result = subprocess.run(['tmux', 'kill-session', '-t', session],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return result.returncode == 0
-        except Exception:
-            return False
+        """Close the tmux session and clean up via Rust executor"""
+        return self.rust_executor.close_session(session)
 
     def cleanup(self):
         """Clean up resources when Archy exits"""
@@ -304,45 +225,12 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         self.close_tmux_session(session)
 
     def capture_tmux_output(self, session: str = "archy_session", lines: int = 100) -> str:
-        """Capture the visible pane output from tmux session"""
-        try:
-            result = subprocess.run(
-                ['tmux', 'capture-pane', '-pt', session, '-S', f'-{lines}'],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.stdout if result.returncode == 0 else ""
-        except Exception:
-            return ""
+        """Capture the visible pane output from tmux session via Rust executor"""
+        return self.rust_executor.capture_output(lines=lines, session=session)
 
     def extract_current_directory(self, terminal_output: str) -> Optional[str]:
-        """Extract the current working directory from the terminal prompt"""
-        lines = terminal_output.strip().split('\n')
-        if not lines:
-            return None
-
-        # Look at the last few lines for the prompt
-        for line in reversed(lines[-5:]):
-            # Common prompt patterns: user@host:path$ or user@host ~/path$ or just path$
-            # Extract directory from patterns like:
-            # chef@Developie ~/Downloads$ or [chef@Developie Downloads]$ or ~/path $
-            import re
-
-            # Pattern 1: user@host:path$ (after colon)
-            match = re.search(r':([~\w/.-]+)\s*\$', line)
-            if match:
-                return match.group(1)
-
-            # Pattern 2: user@host path$ (space before path and $)
-            match = re.search(r'\s([~\w/.-]+)\s*\$', line)
-            if match:
-                return match.group(1)
-
-            # Pattern 3: [user@host path]$ (inside brackets)
-            match = re.search(r'\[.*\s([~\w/.-]+)]', line)
-            if match:
-                return match.group(1)
-
-        return None
+        """Extract the current working directory from the terminal prompt (via Rust)"""
+        return self.rust_executor.extract_current_directory(terminal_output)
 
     def execute_command_in_terminal(self, command: str) -> str:
         """Execute a command using background tmux session with foot as the visible frontend.
@@ -376,32 +264,33 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             except Exception as e:
                 return f"Error launching app: {str(e)}"
 
-        # CLI command: prefer tmux backend with foot frontend
+        # CLI command: prefer tmux backend with foot frontend (via Rust executor)
         session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
         if self.check_command_available('tmux'):
             try:
-                # Ensure detached tmux session exists
-                has = subprocess.run(['tmux', 'has-session', '-t', session],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if has.returncode != 0:
-                    subprocess.run(['tmux', 'new-session', '-d', '-s', session], check=True)
+                # Check if session exists, create if needed
+                if not self.rust_executor.check_session():
+                    self.rust_executor.open_terminal()
 
-                # Send the command into the tmux session
-                subprocess.run(['tmux', 'send-keys', '-t', session, command, 'C-m'], check=False)
+                # Send the command via Rust executor
+                result = self.rust_executor.execute_in_tmux(command, session)
 
-                # Check if foot window is running, reopen it if needed
-                if self.check_command_available('foot'):
-                    if not self.is_foot_running():
-                        # Foot is closed, reopen it
-                        self.reopen_foot_if_needed(session)
-                        return f"✓ Terminal reopened and command sent: {command}"
+                if result.get('success'):
+                    # Check if terminal window is open, reopen if needed
+                    if self.check_command_available('foot'):
+                        if not self.rust_executor.is_foot_running():
+                            self.rust_executor.open_terminal()
+                            return f"✓ Terminal reopened and command sent: {command}"
+                        else:
+                            return f"✓ Command sent to persistent terminal session: {command}"
                     else:
                         return f"✓ Command sent to persistent terminal session: {command}"
                 else:
-                    return f"✓ Command sent to persistent terminal session: {command}"
+                    # Fall back to legacy terminal launch
+                    pass
 
             except Exception:
-                # If tmux path fails, fall back to legacy terminal launch
+                # If Rust executor fails, fall back to legacy terminal launch
                 pass
 
         # Fallback: no tmux available or tmux path failed - use detected terminal
@@ -426,92 +315,14 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         except Exception as e:
             return f"Error launching terminal: {str(e)}"
 
+    def reset_state(self):
+        """Reset conversation and terminal history."""
+        self.conversation_history = []
+        self.terminal_history = []
+        print("\n\033[93m[*] State and history cleared due to session termination.\033[0m")
+
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
-
-        # Check for natural language terminal management commands
-        lower_input = user_input.lower()
-
-        # Terminal open detection
-        open_terminal_keywords = ['open terminal', 'open the terminal', 'open session', 'open the session',
-                                  'start terminal', 'start the terminal', 'launch terminal', 'show terminal']
-
-        # Terminal reopen detection
-        reopen_terminal_keywords = ['reopen terminal', 'reopen the terminal', 'reopen session', 'reconnect']
-
-        # Check if opening a new terminal session
-        if any(keyword in lower_input for keyword in open_terminal_keywords):
-            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-            if self.open_terminal_session(session):
-                yield "✓ Terminal session opened! You're all set. 🚀\n"
-            else:
-                yield "✗ Failed to open terminal session. Make sure foot and tmux are installed.\n"
-            return
-
-        # Check if reopening an existing terminal
-        if any(keyword in lower_input for keyword in reopen_terminal_keywords):
-            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-            if self.reopen_foot_if_needed(session):
-                yield "✓ Terminal reopened with your previous session! 🎯\n"
-            else:
-                yield "✗ Couldn't reopen the terminal. Session might not exist.\n"
-            return
-
-        # Terminal close detection - check variations like "close the terminal", "close terminal", "close foot", etc.
-        close_terminal_keywords = ['close terminal', 'close the terminal', 'close foot', 'close the foot',
-                                   'shut down terminal', 'shut terminal', 'shut down foot', 'shut foot',
-                                   'kill terminal', 'kill foot', 'kill the foot', 'kill the terminal']
-
-        # Session close detection - must be explicit about "session"
-        close_session_keywords = ['close session', 'close the session', 'kill session', 'kill the session',
-                                  'terminate session', 'terminate the session', 'shut down session', 'close tmux']
-
-        # Check if closing terminal (not session)
-        if any(keyword in lower_input for keyword in close_terminal_keywords) and not any(keyword in lower_input for keyword in close_session_keywords):
-            # Just close the foot window without AI involvement
-            if self.close_foot_window():
-                yield "✓ Terminal window closed (session still running in background) 🚀\n"
-            else:
-                yield "✗ Terminal wasn't running, but no worries!\n"
-            return
-
-        # Check if closing session (ask for confirmation)
-        if any(keyword in lower_input for keyword in close_session_keywords):
-            print("\033[93m[!] Are you sure you want to close the tmux session? (yes/no)\033[0m")
-            sys.stdout.write(">>> ")
-            sys.stdout.flush()
-            confirm = sys.stdin.readline().strip().lower()
-            if confirm == 'yes':
-                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                if self.close_tmux_session(session):
-                    yield "✓ Tmux session closed successfully. See you next time! 👋\n"
-                else:
-                    yield "✗ Failed to close tmux session\n"
-            else:
-                yield "✓ Alright, keeping the session alive! 😊\n"
-            return
-
-        # Check if user is asking to analyze terminal output or asking what commands were run
-        analyze_keywords = ['analyze', 'what happened', 'see the output', 'show me', 'what did',
-                           'look at', 'check the', 'read the', 'you see', 'can you see',
-                           'what command', 'did i run', 'what i', 'see what']
-        should_capture = any(keyword in user_input.lower() for keyword in analyze_keywords)
-
-        # ALWAYS capture terminal output when user asks questions (real-time capture)
-        if should_capture:
-            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-            if self.check_command_available('tmux'):
-                try:
-                    import time
-                    # Small delay to ensure terminal has flushed output
-                    time.sleep(0.3)
-                    # Capture the entire terminal buffer (up to 1000 lines) RIGHT NOW
-                    terminal_output = self.capture_tmux_output(session=session, lines=1000)
-                    if terminal_output:
-                        # Prepend the CURRENT terminal state to the user's message
-                        user_input = f"[Current terminal buffer - captured just now]:\n{terminal_output}\n\n[User's question]: {user_input}\n\nNote: This is the LIVE terminal state right now, including any commands Master Angulo ran manually."
-                except Exception:
-                    pass
 
         # Add user message to history
         self.conversation_history.append({"role": "user", "content": user_input})
@@ -555,48 +366,109 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": full_response})
 
+            # Check for special terminal/session management commands
+            # These are generated by the AI when it decides to manage the terminal
+            if "[OPEN_TERMINAL]" in full_response or "[REOPEN_TERMINAL]" in full_response:
+                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                # Try to open/reopen - handles both cases intelligently
+                if self.rust_executor.check_session():
+                    # Session exists, reopen the window
+                    self.rust_executor.open_terminal()
+                    # Verify if foot is running
+                    if self.rust_executor.is_foot_running():
+                        yield "\n\033[92m✓ Terminal window opened\033[0m\n"
+                    else:
+                        yield "\n\033[91m✗ Failed to open terminal window. Please check your foot terminal installation.\033[0m\n"
+                else:
+                    # No session, create new one
+                    self.open_terminal_session(session)
+                    # Verify if foot is running
+                    if self.rust_executor.is_foot_running():
+                        yield "\n\033[92m✓ Terminal session created\033[0m\n"
+                    else:
+                        yield "\n\033[91m✗ Failed to create terminal session. Please check your foot terminal installation.\033[0m\n"
+
+            if "[CLOSE_TERMINAL]" in full_response:
+                result = self.close_foot_window()
+                if result:
+                    yield "\n\033[92m✓ Terminal window closed\033[0m\n"
+                else:
+                    yield "\n\033[93m⚠️ Terminal wasn't open\033[0m\n"
+
+            if "[CLOSE_SESSION]" in full_response:
+                print("\033[93m[!] Are you sure you want to close the tmux session? (yes/no)\033[0m")
+                sys.stdout.write(">>> ")
+                sys.stdout.flush()
+                confirm = sys.stdin.readline().strip().lower()
+                if confirm == 'yes':
+                    session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                    if self.close_tmux_session(session):
+                        yield "\n\033[92m✓ Session closed\033[0m\n"
+                        self.reset_state()
+                    else:
+                        yield "\n\033[91m✗ Failed to close session\033[0m\n"
+
             # Check for command execution using the compiled regex
             command_matches = EXEC_CMD_RE.finditer(full_response)
             commands_to_run = [match.group(1).strip() for match in command_matches]
 
+
             if commands_to_run:
                 for command in commands_to_run:
+                    # 🛡️ SAFETY FILTER: Block dangerous self-referential commands
+                    # These commands would cause deadlocks or unexpected behavior
+
+                    command_lower = command.lower().strip()
+
+                    # Special case: simple "exit" or "exit 0" is OK - just closes the shell
+                    # But warn the user what will happen
+                    if command_lower == 'exit' or command_lower.startswith('exit '):
+                        yield f"\n\033[93m⚠️ Note: 'exit' will close the shell, but I'll still be here in the background!\033[0m\n"
+                        # Execute it - it's safe, just closes the shell
+                        execution_result = self.execute_command_in_terminal(command)
+                        yield f"\033[93m{execution_result}\033[0m\n"
+                        continue
+
+                    # Block truly dangerous patterns
+                    dangerous_patterns = [
+                        'tmux kill-session',
+                        'tmux kill-server',
+                        'tmux detach',
+                        'tmux attach',
+                        'tmux new-session',
+                        'tmux send-keys',
+                    ]
+
+                    is_dangerous = any(pattern in command_lower for pattern in dangerous_patterns)
+
+                    if is_dangerous:
+                        if 'kill-session' in command_lower:
+                            yield f"\n\033[93m⚠️ Cannot execute 'tmux kill-session' from inside the session (would cause deadlock).\033[0m\n"
+                            yield f"\033[93m💡 Use the proper method: just say 'close session' and I'll handle it safely!\033[0m\n"
+                        else:
+                            yield f"\n\033[93m⚠️ Blocked dangerous tmux command: {command}\033[0m\n"
+                            yield f"\033[93m💡 Please use natural language commands like 'close terminal' or 'close session' instead.\033[0m\n"
+                        continue
+
+                    # Safe to execute
                     execution_result = self.execute_command_in_terminal(command)
                     yield f"\n\033[93m{execution_result}\033[0m\n"
+
+                    # If it was a GUI app, don't wait for terminal output
+                    if "GUI app" in execution_result or "launched detached" in execution_result:
+                        continue
 
                     # Capture tmux session output so AI can read and analyze it
                     session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
                     if self.check_command_available('tmux'):
                         try:
-                            import time
-
-                            # Wait for the command to finish by polling for the shell prompt
-                            terminal_output = ""
-                            last_output = ""
-                            prompt_detected = False
-
-                            # Wait up to 10 minutes for very long commands
-                            for attempt in range(300):  # 300 attempts * 2 seconds = 600 seconds (10 minutes)
-                                time.sleep(2)
-                                current_output = self.capture_tmux_output(session=session, lines=500)
-
-                                if current_output:
-                                    terminal_output = current_output
-
-                                    # Check for shell prompt patterns at the end of the output
-                                    last_line = terminal_output.strip().split('\n')[-1]
-                                    if any(prompt in last_line for prompt in ['$', '#', '❯', '~']) and command not in last_line:
-                                        prompt_detected = True
-                                        break
-
-                                    # If output hasn't changed, command might be done or stalled
-                                    if current_output == last_output and attempt > 2:
-                                        # Check if it's just waiting for sudo password
-                                        if "password for" in last_line.lower():
-                                            continue # Keep waiting for password
-                                        break # Assume it's done
-
-                                    last_output = current_output
+                            # Use Rust-based fast command completion detection (500ms intervals instead of 2s)
+                            success, terminal_output = self.rust_executor.wait_for_command_completion(
+                                command=command,
+                                session=session,
+                                max_wait=600,  # 10 minutes max
+                                interval_ms=500  # Check every 500ms (4x faster!)
+                            )
 
                             if terminal_output:
                                 # Store in terminal history for context
@@ -711,20 +583,12 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             yield f"\033[91m❌ Archy Error: An unexpected error occurred: {e}\033[0m"
 
     def get_system_info(self) -> str:
-        """Get system information"""
-        try:
-            result = subprocess.run(['uname', '-a'], capture_output=True, text=True, timeout=5)
-            return f"System: {result.stdout.strip()}"
-        except:
-            return "System info unavailable"
+        """Get system information via Rust executor"""
+        return self.rust_executor.get_system_info()
 
     def check_command_available(self, command: str) -> bool:
-        """Check if a command is available on the system"""
-        try:
-            result = subprocess.run(['which', command], capture_output=True, text=True, timeout=2)
-            return result.returncode == 0
-        except:
-            return False
+        """Check if a command is available on the system via Rust executor"""
+        return self.rust_executor.check_command_available(command)
 
     def get_available_tools(self) -> str:
         """Get list of available system tools"""
@@ -800,9 +664,9 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
                     if user_input.lower() == 'close terminal':
                         if self.close_foot_window():
-                            print("\033[93m✓ [*] Terminal window closed (session still active)\033[0m\n")
+                            print("\033[93m✓ Terminal closed\033[0m\n")
                         else:
-                            print("\033[91m✗ [-] Terminal was not open\033[0m\n")
+                            print("\033[91m✗ Terminal was not running\033[0m\n")
                         continue
 
                     if user_input.lower() == 'close session':
@@ -814,10 +678,11 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                             session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
                             if self.close_tmux_session(session):
                                 print("\033[93m✓ [*] Tmux session closed successfully\033[0m\n")
+                                self.reset_state()  # <-- CLEAR THE STATE
                             else:
                                 print("\033[91m✗ [-] Failed to close tmux session\033[0m\n")
                         else:
-                            print("\033[93m[*] Cancelled\033[0m\n")
+                            print("\033[93m[*] Cancelled\n")
                         continue
 
                     if user_input.lower() == 'clear':

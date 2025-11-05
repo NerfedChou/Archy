@@ -1,6 +1,10 @@
 # Archy
 
-Archy is a local AI assistant designed for Arch Linux. It runs locally using tmux + foot for a single, reusable terminal that Archy can read, summarize, and continue using across commands. Provider: Google Gemini.
+Archy is a local AI assistant designed for Arch Linux. It features a hybrid architecture:
+- **Python Brain**: Handles Gemini API integration, conversation logic, and AI decision-making
+- **Rust Hands**: Fast subprocess execution, tmux management, and system-level operations
+
+Archy uses tmux + foot for a single, reusable terminal that it can read, summarize, and continue using across commands.
 
 ## Table of Contents
 1. Installation
@@ -12,7 +16,7 @@ Archy is a local AI assistant designed for Arch Linux. It runs locally using tmu
 ## Installation
 1. Prerequisites:
    ```bash
-   sudo pacman -S --needed python python-pip curl
+   sudo pacman -S --needed python python-pip rust tmux foot curl
    ```
 2. Clone the repository:
    ```bash
@@ -36,11 +40,43 @@ Archy is a local AI assistant designed for Arch Linux. It runs locally using tmu
    archy
    ```
 
+## Architecture
+
+```
+Gemini API
+    ↓
+Python (Brain)
+├─ Conversation history
+├─ System prompt logic
+├─ Command parsing
+└─ Analysis
+    ↓
+[Unix Socket IPC]
+    ↓
+Rust (Hands)
+├─ Execute commands
+├─ Monitor processes
+├─ Manage tmux sessions
+├─ Capture output
+└─ System integration
+    ↓
+tmux + foot + shell
+```
+
+**Why this design?**
+- Python handles AI logic and API calls efficiently
+- Rust provides fast, reliable system operations
+- Unix socket communication ensures low latency
+- Clean separation of concerns makes testing easier
+- Better error handling at each layer
+
 ## Features
+- **Hybrid Rust + Python architecture** for optimal performance
 - Single, reusable terminal session (tmux backend, foot frontend)
 - Real-time command execution with output capture and summaries
 - Personality-driven responses (casual, helpful, a little witty)
 - Local-first design using your system tools
+- Fast daemon-based executor for system operations
 
 ## Usage
 ```bash

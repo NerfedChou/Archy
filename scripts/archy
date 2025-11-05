@@ -80,6 +80,18 @@ For more info: https://github.com/NerfedChou/Archy
 EOF
 }
 
+# Check if Rust executor daemon is running, start it if not
+if [[ ! -S /tmp/archy.sock ]]; then
+    print_info "Starting Archy executor daemon..."
+    "$ARCHY_DIR/target/release/archy-executor" &
+    sleep 1
+    if [[ -S /tmp/archy.sock ]]; then
+        print_success "Daemon started"
+    else
+        print_warning "Daemon may not have started correctly"
+    fi
+fi
+
 # Main logic
 if [[ $# -eq 0 ]]; then
     # No arguments: launch interactive chat mode

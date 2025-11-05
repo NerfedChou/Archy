@@ -37,12 +37,39 @@ if ! command -v curl &> /dev/null; then
 fi
 echo -e "${GREEN}[+] curl found${NC}"
 
+# Check Rust
+if ! command -v cargo &> /dev/null; then
+    echo -e "${RED}[-] Rust/Cargo is not installed${NC}"
+    echo -e "${YELLOW}[*] Install with: sudo pacman -S rust${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[+] Rust/Cargo found${NC}"
+
+# Check tmux
+if ! command -v tmux &> /dev/null; then
+    echo -e "${YELLOW}[!] tmux not found (optional but recommended)${NC}"
+fi
+
+# Check foot
+if ! command -v foot &> /dev/null; then
+    echo -e "${YELLOW}[!] foot terminal not found (optional but recommended)${NC}"
+fi
+
 # Setup directories
 echo -e "\n${BLUE}[*] Setting up directories...${NC}"
 ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
 mkdir -p "$ARCHY_HOME"
 mkdir -p "$ARCHY_HOME/logs"
 echo -e "${GREEN}[+] Directories created at $ARCHY_HOME${NC}"
+
+# Build Rust executor
+echo -e "\n${BLUE}[*] Building Rust executor daemon...${NC}"
+if cargo build --release; then
+    echo -e "${GREEN}[+] Rust executor built successfully${NC}"
+else
+    echo -e "${RED}[-] Failed to build Rust executor${NC}"
+    exit 1
+fi
 
 # Make CLI script executable and install to /usr/local/bin (use symlinks to keep repo version live)
 echo -e "\n${BLUE}[*] Setting up CLI tools (symlinks)...${NC}"
@@ -51,9 +78,10 @@ chmod +x scripts/archy_chat.py
 # Use absolute paths so systemwide symlinks point to the repository copy
 REPO_ROOT="$(pwd)"
 # Remove any existing installed files first to ensure symlink replaces them
-sudo rm -f /usr/local/bin/archy /usr/local/bin/archy_chat.py
+sudo rm -f /usr/local/bin/archy /usr/local/bin/archy_chat.py /usr/local/bin/rust_executor.py
 sudo ln -sf "$REPO_ROOT/scripts/archy" /usr/local/bin/archy
 sudo ln -sf "$REPO_ROOT/scripts/archy_chat.py" /usr/local/bin/archy_chat.py
+sudo ln -sf "$REPO_ROOT/scripts/rust_executor.py" /usr/local/bin/rust_executor.py
 sudo chmod +x /usr/local/bin/archy
 sudo chmod +x /usr/local/bin/archy_chat.py
 echo -e "${GREEN}[+] Archy CLI tools symlinked to /usr/local/bin (pointing at $REPO_ROOT/scripts)${NC}"
