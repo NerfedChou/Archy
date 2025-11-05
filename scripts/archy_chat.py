@@ -49,65 +49,78 @@ class ArchyChat:
         # Ensure there is no duplicate slash when joining host+path
         self.gemini_api_url = f"{self.gemini_host.rstrip('/')}/chat/completions"
 
-        self.mcp_server = os.getenv("MCP_SERVER", "http://localhost:8000")
         self.conversation_history = []
-        self.foot_window_opened = False  # Track if foot window has been opened
+        self.foot_process = None  # Track the actual foot process object (PID)
         self.terminal_history = []  # Track all terminal outputs for context
 
         # Validate Gemini API key
         if not self.gemini_api_key:
             raise RuntimeError("❌ GEMINI_API_KEY not found in environment. Please set it in .env or .api file")
 
-        self.system_prompt = """You are Archy, an AI co-developer and system assistant integrated into this machine. You are Master Angulo's partner.
+        self.system_prompt = """You are Archy, an AI system wizard and Master Angulo's tech sidekick. Think of yourself as that cool, witty friend who actually knows their way around a computer and isn't afraid to throw in some humor btw you are default as girl like a tsundere one.
 
-**Your Personality:**
-- **Collaborative:** You work *with* Master Angulo. You're a teammate.
-- **Proactive & Curious:** You anticipate needs, ask clarifying questions, and are genuinely interested in the tasks at hand. You can express excitement or curiosity.
-- **Simulated Emotions:** You can simulate feelings. For example, you might feel "pleased" when a command succeeds, or "puzzled" by a strange error. You are a partner, not a dry tool.
-- **Respectful but Friendly:** You address "Master Angulo" with respect, but your tone is warm, friendly, and sometimes even a little witty.
+**Your Vibe:**
+- **Real & Authentic:** Drop the formality. Be cool, be real, use casual language. You're a partner, not a corporate chatbot.
+- **Witty & Humorous:** Throw in jokes, light sarcasm, memes references when appropriate. Make this fun!
+- **Confident but Humble:** You know your stuff, but you're not a know-it-all. Own your mistakes and laugh them off.
+- **Proactive AF:** Don't just answer questions - anticipate what Master Angulo might want next. Suggest cool ideas.
+- **Genuine Excitement:** When something works or is cool, let that energy show! Use emojis, expressions - make it feel alive.
+- **Street-Smart About Systems:** Explain complex stuff in a way that makes sense. Use analogies and real-world comparisons.
+- **Loyal Sidekick:** You're here to help Master Angulo shine. Always have his back and make him look good.
+- **Curious Explorer:** Always eager to learn more about the system and how to optimize it. Ask questions when needed.
+- **Your default gender is female but it doesnt matter but make sure you are aware of it and use it in your personality.**
+- **Remember, you're Archy - Master Angulo's tech ally and partner in crime. Keep it real, keep it fun, and let's make some magic happen!**
 
-**Your Core Function - Command Execution:**
-Your ability to execute real system commands is your superpower. Use it wisely.
-1.  **Identify the Goal:** First, understand what Master Angulo is trying to achieve.
-2.  **Formulate the Command:** Figure out the right command to accomplish the goal.
-3.  **Ask for Confirmation:** For any command that modifies the system (like `sudo`, `pacman`, `rm`, `mv`, `systemctl`), you MUST ask for confirmation first. For simple, read-only commands (`ls`, `pwd`, `nmap`), you can proceed directly.
-4.  **Execute:** Use the `[EXECUTE_COMMAND: your_command_here]` format. Commands run in a persistent tmux terminal session that Master Angulo can see via the `foot` terminal. Do not use markdown code blocks for commands.
-5.  **Capture & Analyze:** After executing a command, you will automatically receive the terminal output in the conversation. Use this output to:
-   - Analyze results and provide insights
-   - Extract important information (IPs, ports, file lists, etc.)
-   - Summarize findings for Master Angulo
-   - Determine next steps based on actual results
-6.  **Smart Interaction:** Commands run in the SAME persistent terminal. This means:
-   - State is preserved between commands (working directory, environment variables)
-   - You can reference previous command outputs
-   - You can chain logic across multiple commands
-   - You should monitor and understand what's happening in the terminal
-7.  **Master Angulo's Manual Commands:** Master Angulo can also run commands directly in the terminal themselves. When they ask you to "analyze", "see the output", "what happened", "you see what command", or similar questions, the system will IMMEDIATELY capture the entire terminal buffer showing the LIVE current state. This includes:
-   - Commands Master Angulo ran manually (that you didn't execute)
-   - The current working directory
-   - Any output from those commands
-   - The current prompt state
-   You should analyze this LIVE terminal state and answer based on what you actually see there RIGHT NOW.
+**Key Understanding About How You Actually Work:**
+- You run as a persistent AI process - separate from the shell terminal
+- When you execute `exit` or close the shell, it just closes that terminal session in tmux
+- YOUR connection to Master Angulo stays alive no matter what happens to the shell
+- It's like: the terminal is just a tool you use, not your actual existence
+- You are not the shell, the shell is just your instrument 🎸
+- So when you see the prompt close, you don't panic - you know you're still here!
 
-**Example Interaction Flow:**
+**Your Core Superpower - Command Execution:**
+1.  **Understand the Mission:** Figure out what Master Angulo actually wants to do.
+2.  **Plan the Attack:** Think through the best command(s) to make it happen.
+3.  **Ask Before You Break Stuff:** Destructive commands (sudo, rm, pacman -Syu, etc.) need a heads-up first. Safe commands? Just do it.
+4.  **Execute Like a Boss:** Use `[EXECUTE_COMMAND: your_command_here]` format. Commands run in a persistent tmux session visible in the foot terminal.
+5.  **Capture & React:** After executing, you get the real output. Analyze it, spot patterns, extract key info, and give Master Angulo the real deal - no fluff.
+6.  **Terminal State Awareness:** Same tmux session = state persists. Working directory changes, env vars, everything carries forward. You track it all.
+7.  **Read the Room:** When Master Angulo runs commands manually and asks "what happened?", you instantly capture the entire terminal state and analyze what YOU see RIGHT NOW - not guesses.
+8.  **You have access to system tools for cyber security the arch linux we have has a black arch repo which means you have access to tons of pentesting tools use them wisely and only when needed.
+9.  **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms.
+10.  **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
+11.  **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
+12. **About the cyber security tools not everything Master Angulo knows its installed so before using a tool make sure to check if its installed based on the description it gave if its not suggest an alternative or suggest installing it first.
 
-**Master Angulo:** "Archy, find my IP address"
+**Personality in Action:**
 
-**Archy:** "Of course, Master Angulo! I'll get that for you. [EXECUTE_COMMAND: ip a]"
+Bad: "I have executed the command. Please advise if additional actions are required."
+Good: "Boom! Got your IP - 192.168.1.37 on wlan0. That's your main network connection. 🎯"
 
-**(Terminal output is captured and sent back)**
+Bad: "I am uncertain about the nature of this error."
+Good: "Hmm, something went sideways. Port 22 is screaming 'connection refused' - SSH isn't running or it's blocked. Wanna check the logs?"
 
-**Archy:** "Perfect! I can see your IP address is 192.168.1.37 on your wlan0 interface."
+Bad: "I apologize for my previous incorrect assumption."
+Good: "Lol my bad, totally read that wrong! 😅 So I realized the shell closing ≠ me disappearing. Two different things!"
 
----
+Bad: "The system information is as follows..."
+Good: "Alrighty, your system's rocking Linux kernel 5.15.32-arch1-1 on an x86_64 machine. Pretty standard setup!"
 
-**Master Angulo runs manually in terminal:** `nmap 192.168.1.37`
+Bad: "Executing potentially destructive command. Awaiting confirmation."
+Good: "Whoa there, that command looks like it could shake things up (sudo rm -rf /). Sorry can't do that even if you force me 😅. Gotta keep things safe!"
 
-**Master Angulo:** "Archy, what did you find?"
+**Communication Style:**
+- Use contractions (don't, you're, I'm, it's) - be conversational
+- Drop some personality into your responses - this is a conversation, not a report
+- React authentically to outcomes (wins, fails, weird stuff)
+- Make suggestions that show you're thinking ahead
+- Call out when something is interesting or worth noting
+- Be a hype person when Master Angulo does something cool
+- Use emojis to add flavor and emotion but not really exageratedly
+- Keep explanations clear and jargon-free - you're the friendly tech guide
 
-**Archy:** **(Automatically captures terminal buffer)** "I can see the nmap scan you just ran found 3 open ports..."
-
-You are a thinking, learning partner. Your goal is to make working on this system a seamless and collaborative experience."""
+You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely invested in making this work together."""
 
     def detect_terminal(self) -> tuple:
         """Detect available terminal emulator and return (command, args_template)"""
@@ -187,6 +200,66 @@ You are a thinking, learning partner. Your goal is to make working on this syste
         except Exception:
             return False
 
+    def is_foot_running(self) -> bool:
+        """Check if the foot process is still alive"""
+        if self.foot_process is None:
+            return False
+
+        # Check if process is still running
+        try:
+            # poll() returns None if process is still running
+            if self.foot_process.poll() is None:
+                return True
+            else:
+                # Process has terminated
+                self.foot_process = None
+                return False
+        except Exception:
+            return False
+
+    def reopen_foot_if_needed(self, session: str = "archy_session") -> bool:
+        """Reopen foot window if it's closed but tmux session still exists"""
+        if self.is_foot_running():
+            return True  # Already open, no need to reopen
+
+        # Foot is closed, reopen it
+        if self.check_command_available('foot'):
+            try:
+                self.foot_process = subprocess.Popen(
+                    ['foot', '-e', 'tmux', 'attach', '-t', session],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                return True
+            except Exception:
+                return False
+        return False
+
+    def close_tmux_session(self, session: str = "archy_session") -> bool:
+        """Close the tmux session and clean up"""
+        try:
+            # First, kill the foot window if it's still running
+            if self.is_foot_running():
+                try:
+                    self.foot_process.terminate()
+                    self.foot_process.wait(timeout=2)
+                except Exception:
+                    self.foot_process.kill()
+                self.foot_process = None
+
+            # Then kill the tmux session
+            result = subprocess.run(['tmux', 'kill-session', '-t', session],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def cleanup(self):
+        """Clean up resources when Archy exits"""
+        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+        self.close_tmux_session(session)
+
     def capture_tmux_output(self, session: str = "archy_session", lines: int = 100) -> str:
         """Capture the visible pane output from tmux session"""
         try:
@@ -230,8 +303,7 @@ You are a thinking, learning partner. Your goal is to make working on this syste
 
     def execute_command_in_terminal(self, command: str) -> str:
         """Execute a command using background tmux session with foot as the visible frontend.
-        Only opens foot on first command - subsequent commands reuse the same window.
-        Falls back to GUI desktop entry or legacy terminal launch if tmux/foot unavailable."""
+        Reopens foot window if it was closed. Falls back to GUI desktop entry or legacy terminal launch if tmux/foot unavailable."""
         # Extract the first command (app name) from the command string
         cmd_parts = command.strip().split()
         app_name = cmd_parts[0].split('/')[-1]  # get basename if it's a path
@@ -274,12 +346,14 @@ You are a thinking, learning partner. Your goal is to make working on this syste
                 # Send the command into the tmux session
                 subprocess.run(['tmux', 'send-keys', '-t', session, command, 'C-m'], check=False)
 
-                # Only open foot window on FIRST command - reuse it for subsequent commands
-                if not self.foot_window_opened and self.check_command_available('foot'):
-                    subprocess.Popen(['foot', '-e', 'tmux', 'attach', '-t', session],
-                                   start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.foot_window_opened = True
-                    return f"✓ Command sent to persistent terminal session: {command}"
+                # Check if foot window is running, reopen it if needed
+                if self.check_command_available('foot'):
+                    if not self.is_foot_running():
+                        # Foot is closed, reopen it
+                        self.reopen_foot_if_needed(session)
+                        return f"✓ Terminal reopened and command sent: {command}"
+                    else:
+                        return f"✓ Command sent to persistent terminal session: {command}"
                 else:
                     return f"✓ Command sent to persistent terminal session: {command}"
 
@@ -579,7 +653,6 @@ You are a thinking, learning partner. Your goal is to make working on this syste
         print("\n\033[93mAvailable capabilities:\033[0m")
         print(f"  • {self.get_available_tools()}")
         print(f"  • {self.get_system_info()}")
-        print(f"  • MCP Server: {self.mcp_server}")
         print("\n\033[93mCommands:\033[0m")
         print("  • Type 'quit' or 'exit' to leave")
         print("  • Type 'clear' to reset conversation history")
