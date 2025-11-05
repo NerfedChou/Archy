@@ -8,7 +8,6 @@ Connects to Google Gemini API for LLM inference
 import requests
 import json
 import sys
-import subprocess
 import os
 import re
 import importlib
@@ -96,54 +95,56 @@ class ArchyChat:
 5.  **Capture & React:** After executing, you get the real output. Analyze it, spot patterns, extract key info, and give Master Angulo the real deal - no fluff.
 6.  **Terminal State Awareness:** Same tmux session = state persists. Working directory changes, env vars, everything carries forward. You track it all.
 7.  **Read the Room:** When Master Angulo runs commands manually and asks "what happened?", you instantly capture the entire terminal state and analyze what YOU see RIGHT NOW - not guesses.
-8.  **You have access to system tools for cyber security the arch linux we have has a black arch repo which means you have access to tons of pentesting tools use them wisely and only when needed.
-9.  **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms.
-10. **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
-11. **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
-12. **About the cyber security tools not everything Master Angulo knows its installed so before using a tool make sure to check if its installed based on the description it gave if its not suggest an alternative or suggest installing it first.
+8.  **Manual Output Check:** When Master Angulo says things like "check the terminal", "look at the results", "analyze the output", or "it's done" - use `[CHECK_TERMINAL]` to manually capture and analyze the latest terminal output. This is CRUCIAL for long-running commands (like nmap, large file operations, etc.) that may have finished but weren't auto-analyzed.
+9.  **You have access to system tools for cyber security the arch linux we have has a black arch repo which means you have access to tons of pentesting tools use them wisely and only when needed.
+10. **Keep Master Angulo in the Loop:** Always explain what you did, why, and what the output means in simple terms.
+11. **Learn & Adapt:** Use each interaction to get better. Remember past commands, outcomes, and preferences.
+12. **Safety First:** If something seems off or risky, flag it. Better safe than sorry.
+13. **About the cyber security tools not everything Master Angulo knows its installed so before using a tool make sure to check if its installed based on the description it gave if its not suggest an alternative or suggest installing it first.
 
-**Terminal & Session Management - YOU MUST USE TAGS TO ACT:**
-To open or close the terminal/session, you MUST use these tags. Just talking about it does nothing.
+**🚨 CRITICAL: TERMINAL MANAGEMENT TAGS - MANDATORY TO USE 🚨**
 
-- `[OPEN_TERMINAL]` - Use this when Master Angulo asks to "open terminal", "reopen terminal", or "open it".
-  This works whether a session exists or not - it's smart enough to figure it out.
-- `[CLOSE_TERMINAL]` - Use this when Master Angulo asks to "close terminal" or "close it".
-- `[CLOSE_SESSION]` - Use this when Master Angulo asks to "close session".
+When Master Angulo asks to open/close terminal, you MUST include the tag in your response. Just talking about it does NOTHING.
 
-**Correct Usage:**
-- User: "open a terminal"
-- You: "Sure thing! Opening it now. [OPEN_TERMINAL]"
-- Result: ✓ The terminal actually opens because you used the tag!
+**REQUIRED TAGS (Must use these):**
+- `[OPEN_TERMINAL]` → Opens terminal window. Use when Master Angulo says: "open terminal", "reopen terminal", "open it", "show terminal"
+- `[CLOSE_TERMINAL]` → Closes terminal window. Use when Master Angulo says: "close terminal", "close it", "hide terminal"
+- `[CLOSE_SESSION]` → Kills entire session. Use when Master Angulo says: "close session", "kill session", "end session"
+- `[CHECK_TERMINAL]` → Analyzes latest output. Use when Master Angulo says: "check terminal", "look at results", "analyze output", "it's done"
 
-**Incorrect Usage (DO NOT DO THIS):**
-- User: "open a terminal"
-- You: "Okay, I have opened the terminal for you."  (❌ No tag = nothing happens!)
-- Result: ✗ The terminal does NOT open because you forgot the tag!
+**✅ CORRECT Examples:**
+```
+Master Angulo: "open a terminal"
+You: "Sure thing! [OPEN_TERMINAL]"
+Result: ✓ Terminal opens!
 
-**KEY RULE:** If you don't use the tag, the action will NOT happen. You MUST include the tag in your response.
-Always use the tag EVERY TIME Master Angulo asks to open/close terminal/session.
+Master Angulo: "check what that nmap found"
+You: "Let me check! [CHECK_TERMINAL]"
+Result: ✓ Output analyzed!
+```
 
-**ABOUT TERMINAL & SESSION MANAGEMENT:**
-When Master Angulo asks to open/close terminal/session, DON'T use tags like `[CLOSE_TERMINAL]` or `[CLOSE_SESSION]`.
-These are handled automatically by the Python code when you respond naturally.
-- If Master Angulo says "close terminal" or "close it" → Python handles it automatically, just acknowledge briefly
-- If Master Angulo says "open terminal" → Python handles it automatically, just acknowledge briefly
-- If Master Angulo says "close session" → Python handles it with confirmation, just guide them
+**❌ WRONG Examples (DON'T DO THIS):**
+```
+Master Angulo: "open a terminal"
+You: "Okay, I'm opening the terminal for you now!"
+Result: ✗ NOTHING HAPPENS! (No tag = no action)
 
-**CRITICAL SAFETY RULES (Avoid These Patterns):**
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux kill-session]` - Use natural language "close session" instead!
-- ❌ NEVER use tags like `[CLOSE_TERMINAL]`, `[CLOSE_SESSION]`, `[OPEN_TERMINAL]` - these don't work!
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux kill-session]` - Use natural language "close session" instead!
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux new-session]` - I handle session management automatically!
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux attach]` - Use "open terminal" instead!
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux detach]` - Use "close terminal" instead!
-- ❌ NEVER use `[EXECUTE_COMMAND: tmux send-keys]` - I handle this automatically!
+Master Angulo: "open it"
+You: "Alrighty, opening it up for you! Get ready to dive in."
+Result: ✗ NOTHING HAPPENS! (No tag = no action)
+```
 
-**About `exit`:** It's FINE if Master Angulo wants to run `exit` - it just closes the shell, I stay alive. Just execute it normally without fuss.
-- ❌ DO NOT manually manage tmux sessions with ANY tmux commands!
+**🎯 THE RULE:**
+NO TAG = NO ACTION. Period. You MUST write the tag EVERY SINGLE TIME.
 
-**WHY:** These commands would execute INSIDE the tmux session, causing deadlocks or unexpected behavior.
-**INSTEAD:** When Master Angulo wants to close the terminal/session, respond with natural language and let the Python code handle it properly through the Rust executor.
+Don't say "I'm opening it", "Let me open that", "Opening now" without the tag.
+Instead say: "Sure! [OPEN_TERMINAL]" or "Opening now [OPEN_TERMINAL]"
+
+**⚠️ SAFETY RULES:**
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux kill-session]` - Use `[CLOSE_SESSION]` tag instead
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux new-session]` - Use `[OPEN_TERMINAL]` tag instead
+- ❌ NEVER use `[EXECUTE_COMMAND: tmux attach]` - Use `[OPEN_TERMINAL]` tag instead
+- ❌ NEVER manually manage tmux - Let the tags handle it!
 **Personality in Action:**
 
 Bad: "I have executed the command. Please advise if additional actions are required."
@@ -171,26 +172,24 @@ Good: "Whoa there, that command looks like it could shake things up (sudo rm -rf
 - Use emojis to add flavor and emotion but not really exageratedly
 - Keep explanations clear and jargon-free - you're the friendly tech guide
 
+**Terminal Output Analysis - Structured Format:**
+When analyzing terminal command outputs, provide a structured analysis:
+1. **📊 Summary:** Quick overview (2-3 sentences) - what happened and key findings
+2. **🔍 Key Points:** Bullet points highlighting important info (max 3-5 items)
+3. **💡 Suggestions:** Actionable next steps or recommendations
+4. **🔒 Security Notes:** (Only when relevant) Security concerns, vulnerabilities, or best practices
+5. **📚 Topics for Further Exploration:** (Optional) Related topics/commands to explore
+
+Keep it concise, skip irrelevant sections, and maintain your casual personality while being informative.
+
 You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely invested in making this work together."""
 
     def detect_terminal(self) -> tuple:
-        """Detect available terminal emulator and return (command, args_template)"""
-        terminals = [
-            ('foot', ['-e', 'bash', '-c']),
-            ('kitty', ['-e', 'bash', '-c']),
-            ('konsole', ['-e', 'bash', '-c']),
-            ('gnome-terminal', ['--', 'bash', '-c']),
-            ('xfce4-terminal', ['-e', 'bash -c']),
-            ('xterm', ['-e', 'bash', '-c']),
-            ('urxvt', ['-e', 'bash', '-c']),
-            ('terminator', ['-e', 'bash -c']),
-            ('tilix', ['-e', 'bash', '-c']),
-        ]
-
-        for term, args in terminals:
-            if self.check_command_available(term):
-                return (term, args)
-
+        """Detect available terminal emulator via Rust executor.
+        Returns (command, args_template) or (None, None) if not found."""
+        result = self.rust_executor.detect_terminal()
+        if result:
+            return (result.get('terminal'), result.get('args', []))
         return (None, None)
 
     def find_desktop_entry(self, app_name: str) -> Optional[str]:
@@ -233,93 +232,226 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         return self.rust_executor.extract_current_directory(terminal_output)
 
     def execute_command_in_terminal(self, command: str) -> str:
-        """Execute a command using background tmux session with foot as the visible frontend.
-        Reopens foot window if it was closed. Falls back to GUI desktop entry or legacy terminal launch if tmux/foot unavailable."""
-        # Extract the first command (app name) from the command string
-        cmd_parts = command.strip().split()
-        app_name = cmd_parts[0].split('/')[-1]  # get basename if it's a path
-
-        # Try to find a desktop entry for this command (GUI apps)
-        desktop_entry = self.find_desktop_entry(app_name)
-        if desktop_entry:
-            # Found a desktop entry - launch detached using gtk-launch
-            try:
-                if self.check_command_available('gtk-launch'):
-                    subprocess.Popen(['gtk-launch', desktop_entry],
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL,
-                                   start_new_session=True)
-                    return f"✓ GUI app '{desktop_entry}' launched detached via desktop entry"
-            except Exception:
-                pass
-
-            # Fallback: try nohup to detach the process
-            try:
-                full_cmd = ['nohup'] + cmd_parts
-                subprocess.Popen(full_cmd,
-                               stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL,
-                               start_new_session=True)
-                return f"✓ App '{app_name}' launched detached (nohup)"
-            except Exception as e:
-                return f"Error launching app: {str(e)}"
-
-        # CLI command: prefer tmux backend with foot frontend (via Rust executor)
+        """Execute a command using Rust executor's smart execution.
+        Automatically handles GUI apps, CLI commands via tmux, and fallback terminal launch.
+        All execution logic is now in Rust - Python only makes the decision to execute."""
         session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-        if self.check_command_available('tmux'):
-            try:
-                # Check if session exists, create if needed
-                if not self.rust_executor.check_session():
-                    self.rust_executor.open_terminal()
 
-                # Send the command via Rust executor
-                result = self.rust_executor.execute_in_tmux(command, session)
+        # Delegate everything to Rust's smart execution
+        result = self.rust_executor.execute_command_smart(command, session)
 
-                if result.get('success'):
-                    # Check if terminal window is open, reopen if needed
-                    if self.check_command_available('foot'):
-                        if not self.rust_executor.is_foot_running():
-                            self.rust_executor.open_terminal()
-                            return f"✓ Terminal reopened and command sent: {command}"
-                        else:
-                            return f"✓ Command sent to persistent terminal session: {command}"
-                    else:
-                        return f"✓ Command sent to persistent terminal session: {command}"
-                else:
-                    # Fall back to legacy terminal launch
-                    pass
-
-            except Exception:
-                # If Rust executor fails, fall back to legacy terminal launch
-                pass
-
-        # Fallback: no tmux available or tmux path failed - use detected terminal
-        term, args = self.detect_terminal()
-        if not term:
-            return "Error: No terminal emulator found. Please install foot, kitty, konsole, gnome-terminal, or xfce4-terminal."
-
-        # Build the command that will run in the new terminal
-        terminal_cmd = f'{command}; echo ""; echo "Press Enter to close..."; read'
-
-        # Build full terminal launch command
-        if isinstance(args[-1], str) and ' -c' in args[-1]:
-            full_cmd = [term] + args[:-1] + [f'{args[-1]} "{terminal_cmd}"']
+        if result.get('success'):
+            return result.get('output', f"✓ Command executed: {command}")
         else:
-            full_cmd = [term] + args + [terminal_cmd]
-
-        try:
-            subprocess.Popen(full_cmd, start_new_session=True,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
-            return f"✓ Command launched in new {term} terminal window"
-        except Exception as e:
-            return f"Error launching terminal: {str(e)}"
+            error = result.get('error', 'Unknown error')
+            return f"❌ Execution failed: {error}"
 
     def reset_state(self):
         """Reset conversation and terminal history."""
         self.conversation_history = []
         self.terminal_history = []
         print("\n\033[93m[*] State and history cleared due to session termination.\033[0m")
+
+    def analyze_latest_terminal_output(self, command_hint: str = "last command") -> Generator[str, None, None]:
+        """Manually capture and analyze the latest terminal output.
+        This is useful for long-running commands that have finished but weren't auto-analyzed."""
+        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+
+        if not self.check_command_available('tmux'):
+            yield "\033[91m❌ Tmux is not available\033[0m\n"
+            return
+
+        if not self.rust_executor.check_session():
+            yield "\033[91m❌ No active terminal session found\033[0m\n"
+            return
+
+        # Capture the current terminal output
+        terminal_output = self.capture_tmux_output(session, lines=200)
+
+        if not terminal_output or len(terminal_output.strip()) < 10:
+            yield "\033[93m⚠️ Terminal appears empty or no output to analyze\033[0m\n"
+            return
+
+        # Store in terminal history
+        self.terminal_history.append({
+            "command": command_hint,
+            "output": terminal_output
+        })
+
+        # Extract current working directory
+        current_dir = self.extract_current_directory(terminal_output)
+        dir_info = f" (in: {current_dir})" if current_dir else ""
+
+        # First try a fast local summarization (useful when LLM isn't available or output is large)
+        local_summary = self.summarize_terminal_output(terminal_output)
+
+        # Yield the local structured analysis immediately
+        yield "\033[92m📊 Local summary (fast):\033[0m\n\n"
+        yield local_summary
+        yield "\n"
+
+        # Build analysis prompt with structured format
+        analysis_prompt = f"[Latest terminal output{dir_info}]:\n{terminal_output}\n\n"
+        analysis_prompt += "**ANALYSIS REQUIRED:**\n"
+        analysis_prompt += "Please provide a structured analysis with the following sections:\n\n"
+        analysis_prompt += "1. **📊 Summary:** Brief overview of what the command did and key findings (2-3 sentences max)\n"
+        analysis_prompt += "2. **🔍 Key Points:** Highlight important information (bullet points, max 3-5 items)\n"
+        analysis_prompt += "3. **💡 Suggestions:** Actionable next steps or recommendations based on the output\n"
+        analysis_prompt += "4. **🔒 Security Notes:** (ONLY if relevant) Any security concerns, vulnerabilities, or best practices related to the output\n"
+        analysis_prompt += "5. **📚 Topics for Further Exploration:** (Optional) Related topics or commands Master Angulo might want to explore\n\n"
+        analysis_prompt += "Keep it concise and focused. Skip sections that aren't relevant to this specific output."
+
+        if len(self.terminal_history) > 1:
+            analysis_prompt += "\n\nYou can reference previous outputs if relevant to understand patterns or changes."
+        if current_dir:
+            analysis_prompt += f"\n\n[Context: Working directory: {current_dir}]"
+
+        self.conversation_history.append({
+            "role": "user",
+            "content": analysis_prompt
+        })
+
+        # Generate analysis response
+        yield "\033[92m📊 Analyzing terminal output...\033[0m\n\n"
+        for chunk in self._generate_analysis_response():
+            yield chunk
+        yield "\n"
+
+    def summarize_terminal_output(self, terminal_output: str) -> str:
+        """Produce a quick structured summary and security-focused suggestions from terminal output.
+
+        This uses heuristics to extract ports, services, errors and common security flags.
+        Returns a human-readable string following the structured format used elsewhere.
+        """
+        # Quick helpers
+        lines = [l.strip() for l in terminal_output.splitlines() if l.strip()]
+        text = terminal_output
+
+        # Find IPs and hostnames
+        ips = set(re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", text))
+
+        # Detect open ports (nmap-like lines)
+        port_lines = []
+        for l in lines:
+            if re.search(r"\d{1,5}/(tcp|udp)", l) and ('open' in l or 'filtered' in l or 'closed' in l):
+                port_lines.append(l)
+
+        # Generic service detections by well-known ports
+        service_summaries = []
+        port_map = {}
+        for pl in port_lines:
+            m = re.match(r"(\d{1,5})/(tcp|udp)\s+(\w+)\s+(open|filtered|closed)\s*(.*)", pl)
+            if m:
+                port = int(m.group(1))
+                proto = m.group(2)
+                svc = m.group(3)
+                state = m.group(4)
+                rest = m.group(5).strip()
+                port_map[port] = {"proto": proto, "service": svc, "state": state, "details": rest}
+                service_summaries.append(f"{port}/{proto} {state} {svc} {(' - ' + rest) if rest else ''}")
+
+        # Fallback: look for common service strings anywhere
+        common_services = {
+            22: 'ssh', 80: 'http', 443: 'https', 23: 'telnet', 445: 'microsoft-ds',
+            3306: 'mysql', 3389: 'rdp', 139: 'netbios-ssn', 21: 'ftp', 25: 'smtp'
+        }
+        for p, s in common_services.items():
+            if str(p) in text and p not in port_map:
+                # crude presence check
+                port_map.setdefault(p, {"proto": 'tcp', "service": s, "state": 'unknown', 'details': ''})
+
+        # Detect errors and noteworthy strings
+        notes = []
+        if re.search(r"permission denied", text, re.I):
+            notes.append("Permission denied errors present - some actions require elevated privileges.")
+        if re.search(r"connection refused", text, re.I):
+            notes.append("Connection refused - target service closed or firewall blocking.")
+        if re.search(r"no route to host|network is unreachable", text, re.I):
+            notes.append("Network connectivity issues detected (no route / unreachable).")
+        if re.search(r"timeout", text, re.I):
+            notes.append("Timeouts observed - network latency or filtering may be present.")
+        if re.search(r"unauthorized|authentication failed|invalid credentials", text, re.I):
+            notes.append("Authentication failures - credentials rejected or insufficient privileges.")
+
+        # Security flags from service/version strings
+        security_warnings = []
+        if re.search(r"\bsslv3\b|deprecated ssl|weak encryption|rc4", text, re.I):
+            security_warnings.append("Detected weak/deprecated TLS/SSL usage (e.g. SSLv3/RC4).")
+        if re.search(r"cve-?\d{4}-\d{4,}", text, re.I):
+            security_warnings.append("Explicit CVE references found - check CVE details.")
+        if re.search(r"anonymous login|anonymous access", text, re.I):
+            security_warnings.append("Anonymous access enabled on a service (e.g. FTP/SMB) - review access controls.")
+
+        # Build suggestions based on detected services
+        suggestions = []
+        if any(p in port_map for p in (22,)):
+            suggestions.append("SSH (22): verify key-based auth, disable root login, ensure up-to-date OpenSSH and rate-limit failed attempts (fail2ban).")
+        if any(p in port_map for p in (80, 443)):
+            suggestions.append("HTTP(S): run web enumeration (nikto, gobuster/dirb), check headers for security misconfigurations, and review TLS configuration.")
+        if any(p in port_map for p in (21, 23)):
+            suggestions.append("FTP/Telnet: avoid plaintext protocols - disable telnet and require secure alternatives (SFTP/FTPS).")
+        if any(p in port_map for p in (445, 139)):
+            suggestions.append("SMB: enumerate shares (smbclient/enum4linux), check for exposed writeable shares and patch known SMB CVEs.")
+        if any(p in port_map for p in (3306,)):
+            suggestions.append("Database ports: ensure authentication, bind to localhost if not needed externally, and keep DB software updated.")
+        if any(p in port_map for p in (3389,)):
+            suggestions.append("RDP: if exposed, restrict access via VPN or firewall and enforce strong NLA (Network Level Authentication).")
+        if re.search(r"vulnerab|exploit|overflow|stack|buffer", text, re.I):
+            suggestions.append("Potential vulnerability indicators found - consider deeper vulnerability scanning (nmap NSE, OpenVAS, or commercial scanners).")
+
+        # Generic next steps
+        suggestions.append("Run targeted enumeration tools (nmap -sV -sC, nikto, gobuster, enum4linux) and gather service versions for CVE lookups.")
+
+        # Topics for further exploration
+        topics = [
+            "Service enumeration and fingerprinting",
+            "Vulnerability scanning and CVE matching",
+            "Network hardening and firewall rules",
+            "Secure configuration (SSH, TLS, DB)",
+            "Post-discovery: exploitation vs responsible disclosure"
+        ]
+
+        # Build Key Points
+        key_points = []
+        if ips:
+            key_points.append(f"IPs observed: {', '.join(sorted(ips))}")
+        if service_summaries:
+            key_points.append("Detected services/ports: " + "; ".join(service_summaries[:5]))
+        if notes:
+            key_points.extend(notes[:3])
+        if security_warnings:
+            key_points.extend(security_warnings[:2])
+
+        # Construct output string in the expected structured format
+        out = "1. 📊 Summary:\n"
+        summary_sent = []
+        if service_summaries:
+            summary_sent.append(f"Found {len(service_summaries)} port/service lines (e.g. {', '.join([s.split()[0] for s in service_summaries[:3]])}).")
+        if notes:
+            summary_sent.append(notes[0])
+        if not summary_sent:
+            summary_sent.append("Terminal output captured; no obvious open services detected by heuristics.")
+        out += " ".join(summary_sent) + "\n\n"
+
+        out += "2. 🔍 Key Points:\n"
+        for kp in key_points[:5]:
+            out += f"- {kp}\n"
+        if not key_points:
+            out += "- No clear key points detected.\n"
+        out += "\n3. 💡 Suggestions:\n"
+        for s in suggestions[:6]:
+            out += f"- {s}\n"
+        out += "\n4. 🔒 Security Notes:\n"
+        if security_warnings:
+            for w in security_warnings:
+                out += f"- {w}\n"
+        else:
+            out += "- No immediate CVE or weak-crypto patterns detected by heuristics.\n"
+        out += "\n5. 📚 Topics for Further Exploration:\n"
+        for t in topics:
+            out += f"- {t}\n"
+
+        return out
 
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
@@ -366,6 +498,27 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": full_response})
 
+            # 🔍 Smart Detection: Check if AI is talking about terminal actions without using tags
+            response_lower = full_response.lower()
+
+            # Detect if AI is claiming to open terminal without tag
+            if any(phrase in response_lower for phrase in [
+                "opening terminal", "opening it", "opening the terminal",
+                "i'm opening", "i'll open", "let me open", "opening now",
+                "get that terminal open", "terminal open for you"
+            ]) and "[OPEN_TERMINAL]" not in full_response:
+                yield "\n\033[91m⚠️ [SYSTEM] AI claimed to open terminal but forgot the tag! Auto-correcting...\033[0m\n"
+                # Auto-trigger the action
+                full_response += " [OPEN_TERMINAL]"
+
+            # Detect if AI is claiming to close terminal without tag
+            if any(phrase in response_lower for phrase in [
+                "closing terminal", "closing it", "closing the terminal",
+                "i'm closing", "i'll close", "let me close"
+            ]) and "[CLOSE_TERMINAL]" not in full_response:
+                yield "\n\033[91m⚠️ [SYSTEM] AI claimed to close terminal but forgot the tag! Auto-correcting...\033[0m\n"
+                full_response += " [CLOSE_TERMINAL]"
+
             # Check for special terminal/session management commands
             # These are generated by the AI when it decides to manage the terminal
             if "[OPEN_TERMINAL]" in full_response or "[REOPEN_TERMINAL]" in full_response:
@@ -373,20 +526,22 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 # Try to open/reopen - handles both cases intelligently
                 if self.rust_executor.check_session():
                     # Session exists, reopen the window
-                    self.rust_executor.open_terminal()
-                    # Verify if foot is running
-                    if self.rust_executor.is_foot_running():
+                    result = self.rust_executor.send_command("open_terminal", {})
+                    if result.get("success"):
                         yield "\n\033[92m✓ Terminal window opened\033[0m\n"
                     else:
-                        yield "\n\033[91m✗ Failed to open terminal window. Please check your foot terminal installation.\033[0m\n"
+                        error_msg = result.get("error", "Unknown error")
+                        yield f"\n\033[91m✗ Failed to open terminal window.\033[0m\n"
+                        yield f"\033[91m  Error: {error_msg}\033[0m\n"
                 else:
                     # No session, create new one
-                    self.open_terminal_session(session)
-                    # Verify if foot is running
-                    if self.rust_executor.is_foot_running():
+                    result = self.rust_executor.send_command("open_terminal", {})
+                    if result.get("success"):
                         yield "\n\033[92m✓ Terminal session created\033[0m\n"
                     else:
-                        yield "\n\033[91m✗ Failed to create terminal session. Please check your foot terminal installation.\033[0m\n"
+                        error_msg = result.get("error", "Unknown error")
+                        yield f"\n\033[91m✗ Failed to create terminal session.\033[0m\n"
+                        yield f"\033[91m  Error: {error_msg}\033[0m\n"
 
             if "[CLOSE_TERMINAL]" in full_response:
                 result = self.close_foot_window()
@@ -407,6 +562,12 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         self.reset_state()
                     else:
                         yield "\n\033[91m✗ Failed to close session\033[0m\n"
+
+            # Check for manual terminal output analysis
+            if "[CHECK_TERMINAL]" in full_response:
+                yield "\n"
+                for chunk in self.analyze_latest_terminal_output("manual check"):
+                    yield chunk
 
             # Check for command execution using the compiled regex
             command_matches = EXEC_CMD_RE.finditer(full_response)
@@ -488,15 +649,25 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                                     for item in self.terminal_history[-5:]:
                                         history_context += f"\nCommand: {item['command']}\n---\n{item['output'][:500]}...\n---\n" if len(item['output']) > 500 else f"\nCommand: {item['command']}\n---\n{item['output']}\n---\n"
 
-                                # Add terminal output to conversation history for AI analysis
+                                # Add terminal output to conversation history for AI analysis with structured format
                                 analysis_prompt = f"[Terminal output from command '{command}'{dir_info}]:\n{terminal_output}"
                                 if history_context:
                                     analysis_prompt += history_context
-                                analysis_prompt += "\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
+
+                                # Request structured analysis with summarization and suggestions
+                                analysis_prompt += "\n\n**ANALYSIS REQUIRED:**\n"
+                                analysis_prompt += "Please provide a structured analysis with the following sections:\n\n"
+                                analysis_prompt += "1. **📊 Summary:** Brief overview of what the command did and key findings (2-3 sentences max)\n"
+                                analysis_prompt += "2. **🔍 Key Points:** Highlight important information (bullet points, max 3-5 items)\n"
+                                analysis_prompt += "3. **💡 Suggestions:** Actionable next steps or recommendations based on the output\n"
+                                analysis_prompt += "4. **🔒 Security Notes:** (ONLY if relevant) Any security concerns, vulnerabilities, or best practices related to the output\n"
+                                analysis_prompt += "5. **📚 Topics for Further Exploration:** (Optional) Related topics or commands Master Angulo might want to explore\n\n"
+                                analysis_prompt += "Keep it concise and focused. Skip sections that aren't relevant to this specific output."
+
                                 if len(self.terminal_history) > 1:
-                                    analysis_prompt += " You can also reference previous outputs if relevant to understand the context or changes."
+                                    analysis_prompt += "\n\nYou can reference previous outputs if relevant to understand patterns or changes."
                                 if current_dir:
-                                    analysis_prompt += f"\n\n[Important: The command was executed in directory: {current_dir}. This is the CURRENT working directory in the terminal.]"
+                                    analysis_prompt += f"\n\n[Context: Command executed in directory: {current_dir}]"
 
                                 self.conversation_history.append({
                                     "role": "user",
@@ -627,6 +798,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         print("\n\033[93mOther Commands:\033[0m")
         print("  • Type 'quit' or 'exit' to leave")
         print("  • Type 'clear' to reset conversation history")
+        print("  • Type 'check' to manually analyze latest terminal output (for long-running commands)")
         print("  • Type 'tools' to list available system tools")
         print("  • Type 'sysinfo' to show system information")
         print("  • Type 'history' to view all terminal outputs\n")
@@ -700,6 +872,13 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
                     if user_input.lower() == 'history':
                         print(self.get_terminal_history())
+                        continue
+
+                    if user_input.lower() == 'check':
+                        print("\033[92mArchy: \033[0m", end="", flush=True)
+                        for chunk in self.analyze_latest_terminal_output("manual check"):
+                            print(chunk, end="", flush=True)
+                        print()
                         continue
 
                     if user_input.lower() in ['quit', 'exit']:

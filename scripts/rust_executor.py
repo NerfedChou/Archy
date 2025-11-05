@@ -42,7 +42,12 @@ class RustExecutor:
         except FileNotFoundError:
             return {
                 "success": False,
-                "error": "Rust executor daemon not running. Please start it with: cargo run"
+                "error": "Rust executor daemon not running. Please start it with: ./start_daemon.sh"
+            }
+        except ConnectionRefusedError:
+            return {
+                "success": False,
+                "error": "Rust executor daemon not running (stale socket). Please start it with: ./start_daemon.sh"
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -126,6 +131,42 @@ class RustExecutor:
         success = result.get("success", False)
         output = result.get("output", "")
         return (success, output)
+
+    def execute_command_smart(self, command: str, session: str = "archy_session") -> Dict[str, Any]:
+        """
+        Smart command execution - automatically handles:
+        - GUI apps (via desktop entries)
+        - CLI commands (via tmux)
+        - Fallback to new terminal window
+
+        This is the recommended way to execute commands as it handles all cases.
+        """
+        return self.send_command("execute_smart", {
+            "command": command,
+            "session": session
+        })
+
+    def launch_gui_app(self, desktop_entry: str) -> Dict[str, Any]:
+        """Launch a GUI application using its desktop entry."""
+        return self.send_command("launch_gui_app", {"desktop_entry": desktop_entry})
+
+    def detect_terminal(self) -> Optional[Dict[str, Any]]:
+        """Detect available terminal emulator. Returns dict with 'terminal' and 'args'."""
+        result = self.send_command("detect_terminal", {})
+        if result.get("success", False) and result.get("output"):
+            import json
+            try:
+                return json.loads(result["output"])
+            except:
+                pass
+        return None
+
+    def launch_fallback_terminal(self, command: str, terminal: str = "foot") -> Dict[str, Any]:
+        """Launch command in a new terminal window (fallback method)."""
+        return self.send_command("launch_fallback_terminal", {
+            "command": command,
+            "terminal": terminal
+        })
 
     def get_last_error(self) -> Optional[str]:
         """Get the last error message if any."""

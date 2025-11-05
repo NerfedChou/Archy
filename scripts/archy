@@ -81,22 +81,53 @@ EOF
 }
 
 # Check if Rust executor daemon is running, start it if not
-if [[ ! -S /tmp/archy.sock ]]; then
-    print_info "Starting Archy executor daemon..."
-    "$ARCHY_DIR/target/release/archy-executor" &
-    sleep 1
-    if [[ -S /tmp/archy.sock ]]; then
+start_daemon() {
+    if [[ ! -f "$ARCHY_DIR/start_daemon.sh" ]]; then
+        print_error "start_daemon.sh not found in $ARCHY_DIR"
+        exit 1
+    fi
+
+    if [[ ! -f "$ARCHY_DIR/target/release/archy-executor" ]]; then
+        print_warning "Rust executor not built. Building now..."
+        (cd "$ARCHY_DIR" && cargo build --release)
+        if [[ $? -ne 0 ]]; then
+            print_error "Failed to build archy-executor"
+            exit 1
+        fi
+    fi
+
+    "$ARCHY_DIR/start_daemon.sh" > /dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
         print_success "Daemon started"
     else
-        print_warning "Daemon may not have started correctly"
+        print_error "Failed to start daemon. Try running: cd $ARCHY_DIR && ./start_daemon.sh"
+        exit 1
     fi
+}
+
+if [[ ! -S /tmp/archy.sock ]]; then
+    print_info "Starting Archy executor daemon..."
+    start_daemon
+elif ! pgrep -f "archy-executor" > /dev/null; then
+    # Socket exists but daemon not running - stale socket
+    print_warning "Stale socket detected, cleaning up..."
+    rm -f /tmp/archy.sock
+    print_info "Starting Archy executor daemon..."
+    start_daemon
+fi
+
+# Check if archy_chat.py exists
+ARCHY_CHAT_PY="$ARCHY_DIR/scripts/archy_chat.py"
+if [[ ! -f "$ARCHY_CHAT_PY" ]]; then
+    print_error "archy_chat.py not found at: $ARCHY_CHAT_PY"
+    exit 1
 fi
 
 # Main logic
 if [[ $# -eq 0 ]]; then
     # No arguments: launch interactive chat mode
     print_success "Launching interactive chat..."
-    exec python3 "/usr/local/bin/archy_chat.py"
+    exec python3 "$ARCHY_CHAT_PY"
     exit 0
 fi
 
@@ -109,15 +140,15 @@ case "$1" in
         if [[ $# -eq 1 ]]; then
             # Interactive mode: archy chat
             print_success "Launching interactive chat..."
-            exec python3 "/usr/local/bin/archy_chat.py"
+            exec python3 "$ARCHY_CHAT_PY"
         else
             # Single question mode: archy chat "question"
             shift  # Remove 'chat' from arguments
-            exec python3 "/usr/local/bin/archy_chat.py" "$@"
+            exec python3 "$ARCHY_CHAT_PY" "$@"
         fi
         ;;
     *)
         # Default: treat as question for single-query mode
-        exec python3 "/usr/local/bin/archy_chat.py" "$@"
+        exec python3 "$ARCHY_CHAT_PY" "$@"
         ;;
 esac

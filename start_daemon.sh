@@ -3,9 +3,14 @@
 
 # Check if daemon is already running
 if [ -S /tmp/archy.sock ]; then
-    echo "⚠️  Archy executor daemon may already be running."
-    echo "If you're sure it's not, remove /tmp/archy.sock and try again."
-    exit 1
+    # Check if the process is actually running
+    if pgrep -f "archy-executor" > /dev/null; then
+        echo "⚠️  Archy executor daemon is already running."
+        exit 1
+    else
+        echo "🧹 Cleaning up stale socket..."
+        rm -f /tmp/archy.sock
+    fi
 fi
 
 # Navigate to Archy directory
