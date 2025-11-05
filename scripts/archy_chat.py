@@ -654,7 +654,8 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         print(f"  • {self.get_available_tools()}")
         print(f"  • {self.get_system_info()}")
         print("\n\033[93mCommands:\033[0m")
-        print("  • Type 'quit' or 'exit' to leave")
+        print("  • Type 'quit' or 'exit' to leave (closes terminal session)")
+        print("  • Type 'close session' to kill the tmux session")
         print("  • Type 'clear' to reset conversation history")
         print("  • Type 'tools' to list available system tools")
         print("  • Type 'sysinfo' to show system information")
@@ -664,51 +665,63 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         """Run interactive chat loop"""
         self.show_greeting()
 
-        while True:
-            try:
-                sys.stdout.write("\033[94mMaster Angulo: \033[0m")
-                sys.stdout.flush()
-                user_input = sys.stdin.readline().strip()
+        try:
+            while True:
+                try:
+                    sys.stdout.write("\033[94mMaster Angulo: \033[0m")
+                    sys.stdout.flush()
+                    user_input = sys.stdin.readline().strip()
 
-                if not user_input:
-                    continue
+                    if not user_input:
+                        continue
 
-                if user_input.lower() == 'clear':
-                    self.conversation_history = []
-                    print("\033[93m[*] Conversation history cleared\033[0m\n")
-                    continue
+                    if user_input.lower() == 'clear':
+                        self.conversation_history = []
+                        print("\033[93m[*] Conversation history cleared\033[0m\n")
+                        continue
 
-                if user_input.lower() == 'tools':
-                    print(f"\033[93m{self.get_available_tools()}\033[0m\n")
-                    continue
+                    if user_input.lower() == 'tools':
+                        print(f"\033[93m{self.get_available_tools()}\033[0m\n")
+                        continue
 
-                if user_input.lower() == 'sysinfo':
-                    print(f"\033[93m{self.get_system_info()}\033[0m\n")
-                    continue
+                    if user_input.lower() == 'sysinfo':
+                        print(f"\033[93m{self.get_system_info()}\033[0m\n")
+                        continue
 
-                if user_input.lower() == 'history':
-                    print(self.get_terminal_history())
-                    continue
+                    if user_input.lower() == 'history':
+                        print(self.get_terminal_history())
+                        continue
 
-                if user_input.lower() in ['quit', 'exit']:
+                    if user_input.lower() == 'close session':
+                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                        if self.close_tmux_session(session):
+                            print("\033[93m✓ [*] Tmux session closed successfully\033[0m\n")
+                        else:
+                            print("\033[91m✗ [-] Failed to close tmux session\033[0m\n")
+                        continue
+
+                    if user_input.lower() in ['quit', 'exit']:
+                        print("\n\033[92mArchy: Your wish is my command, Master Angulo. Farewell! 🙏\033[0m\n")
+                        break
+
+                    print("\033[92mArchy: \033[0m", end="", flush=True)
+
+                    for chunk in self.send_message(user_input):
+                        print(chunk, end="", flush=True)
+
+                    print("\n")
+
+                except EOFError:
                     print("\n\033[92mArchy: Your wish is my command, Master Angulo. Farewell! 🙏\033[0m\n")
                     break
-
-                print("\033[92mArchy: \033[0m", end="", flush=True)
-
-                for chunk in self.send_message(user_input):
-                    print(chunk, end="", flush=True)
-
-                print("\n")
-
-            except EOFError:
-                print("\n\033[92mArchy: Your wish is my command, Master Angulo. Farewell! 🙏\033[0m\n")
-                break
-            except KeyboardInterrupt:
-                print("\n\n\033[92mArchy: Your wish is my command, Master Angulo. Farewell! 🙏\033[0m\n")
-                break
-            except Exception as e:
-                print(f"\033[91m[-] Unexpected error: {str(e)}\033[0m\n")
+                except KeyboardInterrupt:
+                    print("\n\n\033[92mArchy: Your wish is my command, Master Angulo. Farewell! 🙏\033[0m\n")
+                    break
+                except Exception as e:
+                    print(f"\033[91m[-] Unexpected error: {str(e)}\033[0m\n")
+        finally:
+            # Clean up resources when exiting
+            self.cleanup()
 
 
 def main():
