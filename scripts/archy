@@ -17,7 +17,11 @@ fi
 
 # Load .env file if it exists
 if [[ -f "$ARCHY_DIR/.env" ]]; then
-    export $(cat "$ARCHY_DIR/.env" | grep -v '^#' | grep -v '^$' | xargs)
+    # Export variables defined in .env safely
+    set -a
+    # shellcheck disable=SC1090
+    source "$ARCHY_DIR/.env"
+    set +a
 fi
 
 # Load .api secrets file if it exists (export variables)
@@ -30,9 +34,7 @@ if [[ -f "$ARCHY_DIR/.api" ]]; then
 fi
 
 ARCHY_HOME="${ARCHY_HOME:-$HOME/.archy}"
-MCP_SERVER="${MCP_SERVER:-http://localhost:8000}"
-GROQ_API_KEY="${GROQ_API_KEY:-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}"
-MODEL_PROVIDER="${MODEL_PROVIDER:-groq}"
+MODEL_PROVIDER="${MODEL_PROVIDER:-gemini}"
 
 # Color codes
 GREEN='\033[0;32m'

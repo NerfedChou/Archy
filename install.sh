@@ -44,67 +44,6 @@ mkdir -p "$ARCHY_HOME"
 mkdir -p "$ARCHY_HOME/logs"
 echo -e "${GREEN}[+] Directories created at $ARCHY_HOME${NC}"
 
-# Setup MCP native installation
-echo -e "\n${BLUE}[*] Setting up native MCP server...${NC}"
-MCP_DIR="/opt/mcp"
-sudo mkdir -p "$MCP_DIR"
-# Use sudo rsync so files in /opt/mcp (possibly owned by root) can be updated/removed
-sudo rsync -a --delete ./mcp/ "$MCP_DIR/"
-# Ensure ownership so the regular user can manage the installation directory
-sudo chown -R "$USER:$(id -gn)" "$MCP_DIR"
-
-# Create Python venv for MCP
-cd "$MCP_DIR"
-python3 -m venv venv
-source venv/bin/activate
-python -m pip install --upgrade pip --quiet
-python -m pip install --only-binary :all: fastapi uvicorn pydantic requests python-dotenv --quiet
-deactivate
-cd -
-
-# Create systemd service for MCP
-echo -e "${BLUE}[*] Creating MCP systemd service...${NC}"
-sudo tee /etc/systemd/system/mcp.service > /dev/null << 'MCPSERVICE'
-[Unit]
-Description=MCP Service - System Command Executor
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-Group=$(id -gn)
-WorkingDirectory=/opt/mcp
-Environment="PATH=/opt/mcp/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
-Environment="PYTHONUNBUFFERED=1"
-Environment="PYTHONPATH=/opt/mcp"
-ExecStart=/opt/mcp/venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-MCPSERVICE
-
-# Enable and start MCP service
-echo -e "${BLUE}[*] Starting MCP service...${NC}"
-sudo systemctl daemon-reload
-sudo systemctl enable mcp.service
-sudo systemctl start mcp.service
-
-# Wait for MCP to be ready
-echo -e "\n${BLUE}[*] Waiting for MCP server to be ready...${NC}"
-for i in {1..30}; do
-    if curl -s http://localhost:8000/system_info/ > /dev/null 2>&1; then
-        echo -e "${GREEN}[+] MCP Server is ready${NC}"
-        break
-    fi
-    echo -n "."
-    sleep 1
-done
-
-
 # Make CLI script executable and install to /usr/local/bin (use symlinks to keep repo version live)
 echo -e "\n${BLUE}[*] Setting up CLI tools (symlinks)...${NC}"
 chmod +x scripts/archy
@@ -119,25 +58,12 @@ sudo chmod +x /usr/local/bin/archy
 sudo chmod +x /usr/local/bin/archy_chat.py
 echo -e "${GREEN}[+] Archy CLI tools symlinked to /usr/local/bin (pointing at $REPO_ROOT/scripts)${NC}"
 
-# Update .env if it doesn't have MCP_SERVER
-echo -e "\n${BLUE}[*] Setting up environment configuration...${NC}"
-if ! grep -q '^MCP_SERVER=' .env 2>/dev/null; then
-    echo 'MCP_SERVER=http://localhost:8000' >> .env
-    echo -e "${GREEN}[+] MCP_SERVER configuration added to .env${NC}"
-fi
-
 # Verification
 echo -e "\n${BLUE}[*] Verifying installation...${NC}"
-if curl -s http://localhost:8000/system_info/ > /dev/null 2>&1; then
-    echo -e "${GREEN}[+] MCP Server: OK${NC}"
+if which archy >/dev/null 2>&1; then
+  echo -e "${GREEN}[+] Archy CLI: OK (${REPO_ROOT}/scripts)${NC}"
 else
-    echo -e "${YELLOW}[!] MCP Server: Not yet responding (may need a moment to start)${NC}"
-fi
-
-if systemctl is-active --quiet mcp.service; then
-    echo -e "${GREEN}[+] MCP Systemd Service: Active${NC}"
-else
-    echo -e "${YELLOW}[!] MCP Systemd Service: Not active${NC}"
+  echo -e "${RED}[-] Archy CLI not found on PATH${NC}"
 fi
 
 echo -e "\n${BLUE}========================================${NC}"
@@ -148,8 +74,6 @@ echo -e "\n${GREEN}Quick Start:${NC}"
 echo -e "  archy \"what is my working directory?\""
 echo -e "  archy \"list the files in /home/chef\""
 echo -e "  archy                    # Interactive mode"
-echo -e "\n${GREEN}Service Management:${NC}"
-echo -e "  systemctl status mcp.service      # Check MCP status"
-echo -e "  systemctl restart mcp.service     # Restart MCP"
-echo -e "  journalctl -u mcp.service -f      # View MCP logs"
+
+
 echo -e "\n${GREEN}For more info: https://github.com/NerfedChou/Archy${NC}\n"

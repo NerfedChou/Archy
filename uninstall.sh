@@ -14,42 +14,13 @@ echo -e "${RED}  Archy Uninstallation Script${NC}"
 echo -e "${BLUE}========================================${NC}"
 
 # Confirmation
-echo -e "\n${YELLOW}[!] This will remove all Archy services and data${NC}" 
+echo -e "\n${YELLOW}[!] This will remove Archy CLI and optional data${NC}"
 echo -e "${YELLOW}[!] Continue? (yes/no)${NC}"
 read -p ">>> " confirm
 
 if [[ "$confirm" != "yes" ]]; then
     echo -e "${YELLOW}[*] Uninstallation cancelled${NC}"
     exit 0
-fi
-
-# Stop and disable MCP systemd service
-echo -e "\n${BLUE}[*] Stopping MCP service...${NC}"
-if systemctl is-active --quiet mcp.service; then
-    sudo systemctl stop mcp.service
-    echo -e "${GREEN}[+] MCP service stopped${NC}"
-fi
-
-# Disable MCP systemd service
-echo -e "\n${BLUE}[*] Disabling MCP service...${NC}"
-if systemctl is-enabled --quiet mcp.service 2>/dev/null; then
-    sudo systemctl disable mcp.service
-    echo -e "${GREEN}[+] MCP service disabled${NC}"
-fi
-
-# Remove MCP systemd service file
-echo -e "\n${BLUE}[*] Removing MCP systemd service file...${NC}"
-if [ -f /etc/systemd/system/mcp.service ]; then
-    sudo rm /etc/systemd/system/mcp.service
-    sudo systemctl daemon-reload
-    echo -e "${GREEN}[+] MCP service file removed${NC}"
-fi
-
-# Remove MCP installation directory
-echo -e "\n${BLUE}[*] Removing MCP installation...${NC}"
-if [ -d /opt/mcp ]; then
-    sudo rm -rf /opt/mcp
-    echo -e "${GREEN}[+] MCP installation removed${NC}"
 fi
 
 # Remove CLI tools (handle symlinks or files)
@@ -74,6 +45,18 @@ if [[ "$remove_data" == "yes" ]]; then
         rm -rf "$ARCHY_HOME"
         echo -e "${GREEN}[+] Data directory removed${NC}"
     fi
+fi
+
+# Clean up any leftover MCP artifacts just in case (legacy)
+if systemctl list-units --type=service --all | grep -q "mcp.service"; then
+    echo -e "\n${YELLOW}[!] Legacy MCP service detected, removing...${NC}"
+    sudo systemctl stop mcp.service || true
+    sudo systemctl disable mcp.service || true
+    sudo rm -f /etc/systemd/system/mcp.service || true
+    sudo systemctl daemon-reload || true
+fi
+if [ -d /opt/mcp ]; then
+    sudo rm -rf /opt/mcp
 fi
 
 echo -e "\n${BLUE}========================================${NC}"

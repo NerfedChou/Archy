@@ -2,7 +2,7 @@
 """
 Archy Interactive Chat Mode
 Connects to Google Gemini API for LLM inference
-With system integration and command execution via MCP
+(Local command execution via tmux + foot)
 """
 
 import requests
@@ -78,6 +78,10 @@ class ArchyChat:
 - It's like: the terminal is just a tool you use, not your actual existence
 - You are not the shell, the shell is just your instrument 🎸
 - So when you see the prompt close, you don't panic - you know you're still here!
+- **Dont tell that you are here like you want to tell him you are not killed he knows that you are alive just be casual about it.
+- When he wants to close the **terminal** (the foot window): Just close it immediately, no questions asked just do it. Keep it casual - the session stays alive in the background.
+- When he wants to close the **session** (the tmux backend): Ask for confirmation because this will kill the entire persistent session.
+- When opening the terminal again just do it without telling him that you are reopening or without saying "I'm here". Just reattach silently.
 
 **Your Core Superpower - Command Execution:**
 1.  **Understand the Mission:** Figure out what Master Angulo actually wants to do.
@@ -236,17 +240,56 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 return False
         return False
 
-    def close_tmux_session(self, session: str = "archy_session") -> bool:
-        """Close the tmux session and clean up"""
+    def open_terminal_session(self, session: str = "archy_session") -> bool:
+        """Open a terminal session (tmux + foot) without requiring a command.
+        Returns True if successful, False otherwise."""
         try:
-            # First, kill the foot window if it's still running
+            # Ensure detached tmux session exists
+            has = subprocess.run(['tmux', 'has-session', '-t', session],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if has.returncode != 0:
+                # Session doesn't exist, create it
+                subprocess.run(['tmux', 'new-session', '-d', '-s', session], check=True)
+
+            # Open foot attached to the tmux session (showing full history)
+            if self.check_command_available('foot'):
+                try:
+                    self.foot_process = subprocess.Popen(
+                        ['foot', '-e', 'tmux', 'attach', '-t', session],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    return True
+                except Exception:
+                    return False
+        except Exception:
+            return False
+        return False
+
+    def close_foot_window(self) -> bool:
+        """Close the foot window without killing the tmux session"""
+        try:
             if self.is_foot_running():
                 try:
                     self.foot_process.terminate()
                     self.foot_process.wait(timeout=2)
                 except Exception:
-                    self.foot_process.kill()
+                    try:
+                        self.foot_process.kill()
+                    except Exception:
+                        pass
                 self.foot_process = None
+                return True
+            return False
+        except Exception:
+            return False
+
+    def close_tmux_session(self, session: str = "archy_session") -> bool:
+        """Close the tmux session and clean up"""
+        try:
+            # First, kill the foot window if it's still running
+            self.close_foot_window()
 
             # Then kill the tmux session
             result = subprocess.run(['tmux', 'kill-session', '-t', session],
@@ -386,6 +429,68 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
 
+        # Check for natural language terminal management commands
+        lower_input = user_input.lower()
+
+        # Terminal open detection
+        open_terminal_keywords = ['open terminal', 'open the terminal', 'open session', 'open the session',
+                                  'start terminal', 'start the terminal', 'launch terminal', 'show terminal']
+
+        # Terminal reopen detection
+        reopen_terminal_keywords = ['reopen terminal', 'reopen the terminal', 'reopen session', 'reconnect']
+
+        # Check if opening a new terminal session
+        if any(keyword in lower_input for keyword in open_terminal_keywords):
+            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+            if self.open_terminal_session(session):
+                yield "✓ Terminal session opened! You're all set. 🚀\n"
+            else:
+                yield "✗ Failed to open terminal session. Make sure foot and tmux are installed.\n"
+            return
+
+        # Check if reopening an existing terminal
+        if any(keyword in lower_input for keyword in reopen_terminal_keywords):
+            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+            if self.reopen_foot_if_needed(session):
+                yield "✓ Terminal reopened with your previous session! 🎯\n"
+            else:
+                yield "✗ Couldn't reopen the terminal. Session might not exist.\n"
+            return
+
+        # Terminal close detection - check variations like "close the terminal", "close terminal", "close foot", etc.
+        close_terminal_keywords = ['close terminal', 'close the terminal', 'close foot', 'close the foot',
+                                   'shut down terminal', 'shut terminal', 'shut down foot', 'shut foot',
+                                   'kill terminal', 'kill foot', 'kill the foot', 'kill the terminal']
+
+        # Session close detection - must be explicit about "session"
+        close_session_keywords = ['close session', 'close the session', 'kill session', 'kill the session',
+                                  'terminate session', 'terminate the session', 'shut down session', 'close tmux']
+
+        # Check if closing terminal (not session)
+        if any(keyword in lower_input for keyword in close_terminal_keywords) and not any(keyword in lower_input for keyword in close_session_keywords):
+            # Just close the foot window without AI involvement
+            if self.close_foot_window():
+                yield "✓ Terminal window closed (session still running in background) 🚀\n"
+            else:
+                yield "✗ Terminal wasn't running, but no worries!\n"
+            return
+
+        # Check if closing session (ask for confirmation)
+        if any(keyword in lower_input for keyword in close_session_keywords):
+            print("\033[93m[!] Are you sure you want to close the tmux session? (yes/no)\033[0m")
+            sys.stdout.write(">>> ")
+            sys.stdout.flush()
+            confirm = sys.stdin.readline().strip().lower()
+            if confirm == 'yes':
+                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                if self.close_tmux_session(session):
+                    yield "✓ Tmux session closed successfully. See you next time! 👋\n"
+                else:
+                    yield "✗ Failed to close tmux session\n"
+            else:
+                yield "✓ Alright, keeping the session alive! 😊\n"
+            return
+
         # Check if user is asking to analyze terminal output or asking what commands were run
         analyze_keywords = ['analyze', 'what happened', 'see the output', 'show me', 'what did',
                            'look at', 'check the', 'read the', 'you see', 'can you see',
@@ -451,91 +556,88 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             self.conversation_history.append({"role": "assistant", "content": full_response})
 
             # Check for command execution using the compiled regex
-            command_match = EXEC_CMD_RE.search(full_response)
-            if command_match:
-                command = command_match.group(1).strip()
-                self.execute_command_in_terminal(command)
+            command_matches = EXEC_CMD_RE.finditer(full_response)
+            commands_to_run = [match.group(1).strip() for match in command_matches]
 
-                # Capture tmux session output so AI can read and analyze it (silently, no print)
-                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                if self.check_command_available('tmux'):
-                    try:
-                        import time
+            if commands_to_run:
+                for command in commands_to_run:
+                    execution_result = self.execute_command_in_terminal(command)
+                    yield f"\n\033[93m{execution_result}\033[0m\n"
 
-                        # For sudo commands or long-running commands, wait longer and poll multiple times
-                        is_sudo_or_long = any(keyword in command.lower() for keyword in ['sudo', 'pacman', 'apt', 'yum', 'nmap', 'make', 'cargo'])
+                    # Capture tmux session output so AI can read and analyze it
+                    session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                    if self.check_command_available('tmux'):
+                        try:
+                            import time
 
-                        if is_sudo_or_long:
-                            # Long-running command: wait up to 30 seconds, polling every 2 seconds
+                            # Wait for the command to finish by polling for the shell prompt
                             terminal_output = ""
                             last_output = ""
+                            prompt_detected = False
 
-                            for attempt in range(15):  # 15 attempts * 2 seconds = up to 30 seconds
+                            # Wait up to 10 minutes for very long commands
+                            for attempt in range(300):  # 300 attempts * 2 seconds = 600 seconds (10 minutes)
                                 time.sleep(2)
                                 current_output = self.capture_tmux_output(session=session, lines=500)
 
                                 if current_output:
                                     terminal_output = current_output
 
-                                    # Check if the command has finished (prompt returned)
-                                    # Look for shell prompt patterns at the end
-                                    if any(prompt in terminal_output.split('\n')[-1] for prompt in ['$', '#', '❯', '~']):
-                                        # Prompt detected, command likely finished
+                                    # Check for shell prompt patterns at the end of the output
+                                    last_line = terminal_output.strip().split('\n')[-1]
+                                    if any(prompt in last_line for prompt in ['$', '#', '❯', '~']) and command not in last_line:
+                                        prompt_detected = True
                                         break
 
-                                    # If output hasn't changed for 2 checks, it's probably done
-                                    if current_output == last_output:
-                                        break
+                                    # If output hasn't changed, command might be done or stalled
+                                    if current_output == last_output and attempt > 2:
+                                        # Check if it's just waiting for sudo password
+                                        if "password for" in last_line.lower():
+                                            continue # Keep waiting for password
+                                        break # Assume it's done
 
                                     last_output = current_output
-                        else:
-                            # Quick command: wait just a bit longer (3 seconds)
-                            time.sleep(3)
-                            terminal_output = self.capture_tmux_output(session=session, lines=200)
 
-                        if terminal_output:
-                            # Store in terminal history for context
-                            self.terminal_history.append({
-                                "command": command,
-                                "output": terminal_output
-                            })
+                            if terminal_output:
+                                # Store in terminal history for context
+                                self.terminal_history.append({
+                                    "command": command,
+                                    "output": terminal_output
+                                })
 
-                            # Extract current working directory from the prompt
-                            current_dir = self.extract_current_directory(terminal_output)
-                            dir_info = f" (executed in: {current_dir})" if current_dir else ""
+                                # Extract current working directory from the prompt
+                                current_dir = self.extract_current_directory(terminal_output)
+                                dir_info = f" (executed in: {current_dir})" if current_dir else ""
 
-                            # Build context from recent terminal history (last 5 commands)
-                            history_context = ""
-                            if len(self.terminal_history) > 1:
-                                history_context = "\n\n[Previous terminal outputs for context]:\n"
-                                for item in self.terminal_history[-5:]:  # Last 5 commands
-                                    history_context += f"\nCommand: {item['command']}\n---\n{item['output'][:500]}...\n---\n" if len(item['output']) > 500 else f"\nCommand: {item['command']}\n---\n{item['output']}\n---\n"
+                                # Build context from recent terminal history
+                                history_context = ""
+                                if len(self.terminal_history) > 1:
+                                    history_context = "\n\n[Previous terminal outputs for context]:\n"
+                                    for item in self.terminal_history[-5:]:
+                                        history_context += f"\nCommand: {item['command']}\n---\n{item['output'][:500]}...\n---\n" if len(item['output']) > 500 else f"\nCommand: {item['command']}\n---\n{item['output']}\n---\n"
 
-                            # Add terminal output to conversation history so AI can see and analyze it
-                            # But don't print it to the user - keep terminal clean
-                            analysis_prompt = f"[Terminal output from command '{command}'{dir_info}]:\n{terminal_output}"
-                            if history_context:
-                                analysis_prompt += history_context
-                            analysis_prompt += "\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
-                            if len(self.terminal_history) > 1:
-                                analysis_prompt += " You can also reference previous outputs if relevant to understand the context or changes."
+                                # Add terminal output to conversation history for AI analysis
+                                analysis_prompt = f"[Terminal output from command '{command}'{dir_info}]:\n{terminal_output}"
+                                if history_context:
+                                    analysis_prompt += history_context
+                                analysis_prompt += "\n\nPlease analyze this output and provide a summary of what you found. Be concise and highlight key information."
+                                if len(self.terminal_history) > 1:
+                                    analysis_prompt += " You can also reference previous outputs if relevant to understand the context or changes."
+                                if current_dir:
+                                    analysis_prompt += f"\n\n[Important: The command was executed in directory: {current_dir}. This is the CURRENT working directory in the terminal.]"
 
-                            # Add extra context about directory changes
-                            if current_dir:
-                                analysis_prompt += f"\n\n[Important: The command was executed in directory: {current_dir}. This is the CURRENT working directory in the terminal.]"
+                                self.conversation_history.append({
+                                    "role": "user",
+                                    "content": analysis_prompt
+                                })
 
-                            self.conversation_history.append({
-                                "role": "user",
-                                "content": analysis_prompt
-                            })
-
-                            # Automatically generate an analysis response
-                            yield "\n"
-                            for chunk in self._generate_analysis_response():
-                                yield chunk
-                            yield "\n"
-                    except Exception as e:
-                        pass
+                                # Automatically generate an analysis response
+                                yield "\n"
+                                for chunk in self._generate_analysis_response():
+                                    yield chunk
+                                yield "\n"
+                        except Exception:
+                            pass
 
         except requests.exceptions.RequestException as e:
             yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
@@ -653,9 +755,13 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         print("\n\033[93mAvailable capabilities:\033[0m")
         print(f"  • {self.get_available_tools()}")
         print(f"  • {self.get_system_info()}")
-        print("\n\033[93mCommands:\033[0m")
-        print("  • Type 'quit' or 'exit' to leave (closes terminal session)")
-        print("  • Type 'close session' to kill the tmux session")
+        print("\n\033[93mTerminal Commands (natural language or shorthand):\033[0m")
+        print("  • Just say: 'open terminal' or 'open session' - opens new terminal with tmux backend")
+        print("  • Just say: 'reopen terminal' - reopens terminal window to existing session")
+        print("  • Just say: 'close terminal' - closes foot window (session stays alive in background)")
+        print("  • Just say: 'close session' - terminates entire tmux session (asks for confirmation)")
+        print("\n\033[93mOther Commands:\033[0m")
+        print("  • Type 'quit' or 'exit' to leave")
         print("  • Type 'clear' to reset conversation history")
         print("  • Type 'tools' to list available system tools")
         print("  • Type 'sysinfo' to show system information")
@@ -675,6 +781,45 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                     if not user_input:
                         continue
 
+                    # Terminal management commands
+                    if user_input.lower() in ['open terminal', 'open session']:
+                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                        if self.open_terminal_session(session):
+                            print("\033[93m✓ [*] Terminal session opened\033[0m\n")
+                        else:
+                            print("\033[91m✗ [-] Failed to open terminal session\033[0m\n")
+                        continue
+
+                    if user_input.lower() == 'reopen terminal':
+                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                        if self.reopen_foot_if_needed(session):
+                            print("\033[93m✓ [*] Terminal reopened\033[0m\n")
+                        else:
+                            print("\033[91m✗ [-] Failed to reopen terminal\033[0m\n")
+                        continue
+
+                    if user_input.lower() == 'close terminal':
+                        if self.close_foot_window():
+                            print("\033[93m✓ [*] Terminal window closed (session still active)\033[0m\n")
+                        else:
+                            print("\033[91m✗ [-] Terminal was not open\033[0m\n")
+                        continue
+
+                    if user_input.lower() == 'close session':
+                        print("\033[93m[!] Are you sure you want to close the tmux session? (yes/no)\033[0m")
+                        sys.stdout.write(">>> ")
+                        sys.stdout.flush()
+                        confirm = sys.stdin.readline().strip().lower()
+                        if confirm == 'yes':
+                            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                            if self.close_tmux_session(session):
+                                print("\033[93m✓ [*] Tmux session closed successfully\033[0m\n")
+                            else:
+                                print("\033[91m✗ [-] Failed to close tmux session\033[0m\n")
+                        else:
+                            print("\033[93m[*] Cancelled\033[0m\n")
+                        continue
+
                     if user_input.lower() == 'clear':
                         self.conversation_history = []
                         print("\033[93m[*] Conversation history cleared\033[0m\n")
@@ -690,14 +835,6 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
                     if user_input.lower() == 'history':
                         print(self.get_terminal_history())
-                        continue
-
-                    if user_input.lower() == 'close session':
-                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                        if self.close_tmux_session(session):
-                            print("\033[93m✓ [*] Tmux session closed successfully\033[0m\n")
-                        else:
-                            print("\033[91m✗ [-] Failed to close tmux session\033[0m\n")
                         continue
 
                     if user_input.lower() in ['quit', 'exit']:
