@@ -19,7 +19,6 @@ StartLimitAction=none
 
 # Resource limits to prevent memory exhaustion
 MemoryMax=512M
-TasksMax=100
 
 # Process management
 KillMode=process

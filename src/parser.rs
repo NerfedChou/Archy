@@ -71,8 +71,13 @@ pub fn detect_format(output: &str, command: &str) -> String {
         return "network_table".to_string();
     } else if output.lines().filter(|l| l.contains("|") || l.contains("│")).count() > 3 {
         return "table".to_string();
-    } else if output.starts_with('{') || output.starts_with('[') {
-        return "json".to_string();
+    } else if (output.trim().starts_with('{') && output.trim().ends_with('}'))
+           || (output.trim().starts_with('[') && output.trim().ends_with(']')) {
+        // Only detect as JSON if it's actually a complete JSON structure
+        // AND has more than just a simple value
+        if output.trim().len() > 10 && (output.contains(':') || output.contains(',')) {
+            return "json".to_string();
+        }
     }
 
     "plain_text".to_string()
@@ -491,17 +496,37 @@ fn parse_json(raw: &str, metadata: Metadata) -> ParsedOutput {
         Err(_) => json!({ "raw": raw }),
     };
 
-    let findings = vec![Finding {
-        category: "Format".to_string(),
-        message: "JSON data detected and parsed".to_string(),
-        importance: Importance::Info,
-    }];
+    // Don't add findings for JSON format - it's not interesting
+    let findings = Vec::new();
+
+    // Generate a better summary based on JSON content
+    let summary = match &structured {
+        Value::Object(map) if !map.is_empty() => {
+            format!("JSON object with {} field(s)", map.len())
+        }
+        Value::Array(arr) if !arr.is_empty() => {
+            format!("JSON array with {} item(s)", arr.len())
+        }
+        Value::String(s) if s.len() <= 80 => {
+            s.clone()
+        }
+        Value::String(_) => {
+            "JSON string".to_string()
+        }
+        _ => {
+            if metadata.line_count == 1 {
+                raw.trim().to_string()
+            } else {
+                format!("JSON data ({} lines)", metadata.line_count)
+            }
+        }
+    };
 
     ParsedOutput {
         raw: raw.to_string(),
         structured,
         findings,
-        summary: "JSON data parsed successfully".to_string(),
+        summary,
         metadata,
     }
 }
@@ -586,13 +611,31 @@ fn parse_journalctl(raw: &str, metadata: Metadata) -> ParsedOutput {
 /// Generic parser for unknown formats
 fn parse_generic(raw: &str, metadata: Metadata) -> ParsedOutput {
     let findings = Vec::new();
+    let trimmed = raw.trim();
 
     let structured = json!({
         "type": "plain_text",
-        "line_count": metadata.line_count
+        "line_count": metadata.line_count,
+        "content": trimmed
     });
 
-    let summary = format!("Output captured ({} lines)", metadata.line_count);
+    // Generate smarter summary based on output characteristics
+    let summary = if metadata.line_count == 0 {
+        "No output".to_string()
+    } else if metadata.line_count == 1 {
+        // Single line output - show it directly (truncated if too long)
+        if trimmed.len() <= 80 {
+            trimmed.to_string()
+        } else {
+            format!("{}...", &trimmed[..77])
+        }
+    } else if metadata.line_count <= 5 {
+        // Few lines - mention the count
+        format!("{} lines of output", metadata.line_count)
+    } else {
+        // Many lines - just mention the count
+        format!("{} lines of output", metadata.line_count)
+    };
 
     ParsedOutput {
         raw: raw.to_string(),
