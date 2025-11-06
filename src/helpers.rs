@@ -251,12 +251,30 @@ pub mod environment {
     use std::process::Command;
 
     /// Detect the correct DISPLAY for the current session
-    /// First checks env var, then searches for active X displays
+    /// First checks env var, then queries systemd user environment, then searches for active X displays
     pub fn get_display() -> String {
         // First, check if DISPLAY is already set in environment
         if let Ok(display) = std::env::var("DISPLAY") {
             if !display.is_empty() {
                 return display;
+            }
+        }
+
+        // Try to get DISPLAY from systemd user environment (for services)
+        if let Ok(output) = Command::new("systemctl")
+            .args(&["--user", "show-environment"])
+            .output()
+        {
+            if let Ok(env_output) = String::from_utf8(output.stdout) {
+                for line in env_output.lines() {
+                    if line.starts_with("DISPLAY=") {
+                        if let Some(display) = line.strip_prefix("DISPLAY=") {
+                            if !display.is_empty() {
+                                return display.to_string();
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -269,10 +287,6 @@ pub mod environment {
             }
         }
 
-        // Try Wayland
-        if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            // Wayland detected, no action needed
-        }
 
         // Fallback
         ":0".to_string()
@@ -285,12 +299,61 @@ pub mod environment {
         })
     }
 
+    /// Get WAYLAND_DISPLAY for Wayland sessions
+    pub fn get_wayland_display() -> String {
+        // Check environment variable first
+        if let Ok(display) = std::env::var("WAYLAND_DISPLAY") {
+            if !display.is_empty() {
+                return display;
+            }
+        }
+
+        // Try to get from systemd user environment
+        if let Ok(output) = Command::new("systemctl")
+            .args(&["--user", "show-environment"])
+            .output()
+        {
+            if let Ok(env_output) = String::from_utf8(output.stdout) {
+                for line in env_output.lines() {
+                    if line.starts_with("WAYLAND_DISPLAY=") {
+                        if let Some(display) = line.strip_prefix("WAYLAND_DISPLAY=") {
+                            if !display.is_empty() {
+                                return display.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback
+        "wayland-0".to_string()
+    }
+
     /// Get proper DBUS address for the current session
     pub fn get_dbus_address() -> String {
         // Try to get from environment
         if let Ok(addr) = std::env::var("DBUS_SESSION_BUS_ADDRESS") {
             if !addr.is_empty() {
                 return addr;
+            }
+        }
+
+        // Try to get from systemd user environment
+        if let Ok(output) = Command::new("systemctl")
+            .args(&["--user", "show-environment"])
+            .output()
+        {
+            if let Ok(env_output) = String::from_utf8(output.stdout) {
+                for line in env_output.lines() {
+                    if line.starts_with("DBUS_SESSION_BUS_ADDRESS=") {
+                        if let Some(addr) = line.strip_prefix("DBUS_SESSION_BUS_ADDRESS=") {
+                            if !addr.is_empty() {
+                                return addr.to_string();
+                            }
+                        }
+                    }
+                }
             }
         }
 

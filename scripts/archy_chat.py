@@ -462,17 +462,22 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             has_flags = '-' in command and len(command.split()) > 1
 
             if has_flags:
-                prompt = f"""Explain this command in 1-2 short sentences. If it has flags, briefly explain what each flag does (1 sentence per flag). Be concise.
+                prompt = f"""Provide a detailed, technical explanation of this command in 2-3 sentences. For each flag, explain specifically what it does (be technical and precise, not generic). Include what the output will show.
 
 Command: {command}
 
-Just give the explanation, nothing else."""
+Format:
+- Main purpose: [what the command does]
+- Flags: [explain each flag technically]
+- Output: [what you'll see]
+
+Be specific and technical, not generic."""
             else:
-                prompt = f"""Explain what this command does in 1 sentence. Be concise.
+                prompt = f"""Explain what this command does in 2 sentences. Be specific and technical about what it does and what output it produces.
 
 Command: {command}
 
-Just give the explanation, nothing else."""
+Be precise and detailed, not generic."""
 
             headers = {
                 "Authorization": f"Bearer {self.gemini_api_key}",
@@ -481,8 +486,8 @@ Just give the explanation, nothing else."""
             payload = {
                 "model": self.gemini_model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
-                "max_tokens": 100  # Slightly more tokens for flag explanations
+                "temperature": 0.3,  # Lower temperature for more factual, precise responses
+                "max_tokens": 150  # More tokens for detailed explanations
             }
 
             response = requests.post(
@@ -512,8 +517,56 @@ Just give the explanation, nothing else."""
         except Exception as e:
             pass  # Silently fail and use fallback
 
-        # Fallback short explanation
-        fallback = f"Executes: {command.split()[0] if command.strip() else command}"
+        # Fallback detailed explanations for common commands
+        cmd_base = command.split()[0] if command.strip() else command
+        common_explanations = {
+            'ls': 'Lists directory contents. Shows files and folders in the current directory.',
+            'pwd': 'Prints the absolute path of the current working directory.',
+            'cd': 'Changes the current directory to the specified path.',
+            'mkdir': 'Creates a new directory with the specified name.',
+            'rm': 'Removes (deletes) files or directories. Use with caution!',
+            'cp': 'Copies files or directories from source to destination.',
+            'mv': 'Moves or renames files and directories.',
+            'cat': 'Displays the contents of a file to the terminal.',
+            'echo': 'Prints text or variables to the terminal output.',
+            'grep': 'Searches for patterns in files using regular expressions.',
+            'find': 'Searches for files and directories based on various criteria.',
+            'chmod': 'Changes file permissions (read, write, execute) for owner, group, and others.',
+            'chown': 'Changes file ownership to a different user or group.',
+            'ps': 'Displays information about running processes.',
+            'top': 'Shows real-time system resource usage and running processes.',
+            'kill': 'Sends signals to processes, typically to terminate them.',
+            'df': 'Reports disk space usage for filesystems.',
+            'du': 'Estimates disk space used by files and directories.',
+            'tar': 'Archives multiple files into a single file or extracts from archives.',
+            'wget': 'Downloads files from the internet via HTTP/HTTPS/FTP.',
+            'curl': 'Transfers data to/from servers using various protocols.',
+            'ssh': 'Establishes secure shell connection to remote systems.',
+            'scp': 'Securely copies files between local and remote systems via SSH.',
+            'git': 'Version control system for tracking changes in source code.',
+            'systemctl': 'Controls systemd services (start, stop, status, enable, disable).',
+            'journalctl': 'Views systemd journal logs and system messages.',
+            'ip': 'Shows and manipulates network interfaces, routing, and tunnels.',
+            'ifconfig': 'Displays or configures network interface parameters.',
+            'ping': 'Tests network connectivity by sending ICMP echo requests.',
+            'nmap': 'Network scanner that discovers hosts and services on a network.',
+            'netstat': 'Displays network connections, routing tables, and interface statistics.',
+            'apt': 'Package manager for Debian/Ubuntu systems (install, update, remove packages).',
+            'pacman': 'Package manager for Arch Linux systems.',
+            'yum': 'Package manager for Red Hat/CentOS systems.',
+            'nano': 'Simple text editor for terminal use.',
+            'vim': 'Advanced, modal text editor with powerful features.',
+            'touch': 'Creates empty files or updates file timestamps.',
+            'head': 'Displays the first lines of a file.',
+            'tail': 'Displays the last lines of a file. Often used with -f to follow logs.',
+            'which': 'Shows the full path of shell commands.',
+            'whoami': 'Displays the current username.',
+            'uname': 'Displays system information (kernel name, version, architecture).',
+            'hostname': 'Shows or sets the system hostname.',
+            'free': 'Displays memory usage (RAM and swap).',
+        }
+
+        fallback = common_explanations.get(cmd_base, f"Executes the '{cmd_base}' command. {command}")
         if not hasattr(self, '_explanation_cache'):
             self._explanation_cache = {}
         self._explanation_cache[command] = fallback

@@ -246,7 +246,18 @@ fn open_terminal(config: &Config) -> Response {
     }
 
     // Open foot terminal attached to session (non-blocking, detached)
+    // FIX: Set environment variables for GUI/terminal to work correctly when running as systemd service
+    use helpers::environment;
+    let display = environment::get_display();
+    let xauthority = environment::get_xauthority();
+    let dbus_addr = environment::get_dbus_address();
+    let wayland_display = environment::get_wayland_display();
+
     let result = Command::new("setsid")
+        .env("DISPLAY", &display)
+        .env("XAUTHORITY", &xauthority)
+        .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+        .env("WAYLAND_DISPLAY", &wayland_display)
         .args(&["foot", "-e", "tmux", "attach", "-t", session])
         .spawn();
 
@@ -901,12 +912,14 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
     let display = environment::get_display();
     let xauthority = environment::get_xauthority();
     let dbus_addr = environment::get_dbus_address();
+    let wayland_display = environment::get_wayland_display();
 
     // Try gtk-launch first (most reliable)
     let gtk_result = Command::new("gtk-launch")
         .env("DISPLAY", &display)
         .env("XAUTHORITY", &xauthority)
         .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+        .env("WAYLAND_DISPLAY", &wayland_display)
         .arg(desktop_entry)
         .spawn();
 
@@ -995,15 +1008,17 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                             }
                         }
 
-                        // Get environment variables for GUI support
-                        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
-                        let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
-                            format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
-                        });
+                        // Get environment variables for GUI support using helpers
+                        let display = environment::get_display();
+                        let xauthority = environment::get_xauthority();
+                        let dbus_addr = environment::get_dbus_address();
+                        let wayland_display = environment::get_wayland_display();
 
                         let result = Command::new(exec_path)
                             .env("DISPLAY", &display)
                             .env("XAUTHORITY", &xauthority)
+                            .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+                            .env("WAYLAND_DISPLAY", &wayland_display)
                             .args(&parts[1..])
                             .spawn();
 
@@ -1038,15 +1053,17 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
             if !cmd_path.is_empty() {
                 eprintln!("    Found in PATH: {}", cmd_path);
 
-                // Get environment variables for GUI support
-                let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
-                let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
-                    format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
-                });
+                // Get environment variables for GUI support using helpers
+                let display = environment::get_display();
+                let xauthority = environment::get_xauthority();
+                let dbus_addr = environment::get_dbus_address();
+                let wayland_display = environment::get_wayland_display();
 
                 let spawn_result = Command::new(&cmd_path)
                     .env("DISPLAY", &display)
                     .env("XAUTHORITY", &xauthority)
+                    .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+                    .env("WAYLAND_DISPLAY", &wayland_display)
                     .spawn();
 
                 if let Ok(_child) = spawn_result {
@@ -1168,7 +1185,18 @@ fn launch_fallback_terminal(data: &serde_json::Value) -> Response {
 
     let terminal_cmd = format!("{}; echo ''; echo 'Press Enter to close...'; read", command);
 
+    // Set environment variables for terminal to work correctly
+    use helpers::environment;
+    let display = environment::get_display();
+    let xauthority = environment::get_xauthority();
+    let dbus_addr = environment::get_dbus_address();
+    let wayland_display = environment::get_wayland_display();
+
     let result = Command::new("setsid")
+        .env("DISPLAY", &display)
+        .env("XAUTHORITY", &xauthority)
+        .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
+        .env("WAYLAND_DISPLAY", &wayland_display)
         .arg(terminal)
         .arg("-e")
         .arg("bash")
