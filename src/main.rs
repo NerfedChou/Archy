@@ -1,46 +1,49 @@
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::io::{Read, Write};
 use std::process::Command;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json;
 use std::fs;
 use std::path::PathBuf;
 
-// New modules for complete architecture
+// New modular architecture
 mod formatter;
 mod parser;
 mod output;
+mod config;
+mod helpers;
+mod tmux;
 
 use output::DisplayOutput;
+use config::Config;
+use helpers::{response, params, Response};
+use serde_json::Value;
 
 #[derive(Deserialize)]
 struct Request {
     action: String,
-    data: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct Response {
-    success: bool,
-    output: Option<String>,
-    error: Option<String>,
-    exists: Option<bool>,
+    data: Value,
 }
 
 fn main() -> std::io::Result<()> {
-    let socket_path = "/tmp/archy.sock";
+    // Load configuration from environment
+    let config = Config::from_env();
 
     // Remove old socket if exists
-    let _ = fs::remove_file(socket_path);
+    let _ = fs::remove_file(&config.socket_path);
 
-    let listener = UnixListener::bind(socket_path)?;
-    println!("🦀 Archy Executor (Rust) listening on {}", socket_path);
+    let listener = UnixListener::bind(&config.socket_path)?;
+    println!("🦀 Archy Executor (Rust) listening on {}", config.socket_path);
+    println!("✅ Configuration loaded:");
+    println!("   • Socket: {}", config.socket_path);
+    println!("   • Default session: {}", config.default_session);
+    println!("   • Buffer size: {}", config.max_buffer_size);
     println!("✅ Ready to handle system operations...\n");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(e) = handle_client(stream) {
+                if let Err(e) = handle_client(stream, &config) {
                     eprintln!("❌ Client handler error: {}", e);
                 }
             }
@@ -51,8 +54,8 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn handle_client(mut stream: UnixStream) -> std::io::Result<()> {
-    let mut buffer = [0; 4096];
+fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()> {
+    let mut buffer = vec![0; config.max_buffer_size];
 
     let size = stream.read(&mut buffer)?;
     let request: Request = match serde_json::from_slice(&buffer[..size]) {
@@ -64,12 +67,12 @@ fn handle_client(mut stream: UnixStream) -> std::io::Result<()> {
     };
 
     let response = match request.action.as_str() {
-        "execute" => execute_command(&request.data),
+        "execute" => execute_command(&request.data, config),
         "execute_analyzed" => return handle_execute_analyzed(&mut stream, &request.data),
         "execute_and_wait" => return handle_execute_and_wait(&mut stream, &request.data),
-        "capture" => capture_tmux_output(&request.data),
+        "capture" => capture_tmux_output(&request.data, config),
         "capture_analyzed" => return handle_capture_analyzed(&mut stream, &request.data),
-        "check_session" => check_tmux_session(),
+        "check_session" => check_tmux_session(config),
         "open_terminal" => open_terminal(),
         "close_terminal" => close_terminal(),
         "close_session" => close_session(&request.data),
@@ -83,12 +86,7 @@ fn handle_client(mut stream: UnixStream) -> std::io::Result<()> {
         "detect_terminal" => detect_terminal(),
         "launch_fallback_terminal" => launch_fallback_terminal(&request.data),
         "execute_smart" => execute_command_smart(&request.data),
-        _ => Response {
-            success: false,
-            output: None,
-            error: Some("Unknown action".to_string()),
-            exists: None,
-        },
+        _ => response::error("Unknown action".to_string()),
     };
 
     let json = serde_json::to_string(&response).unwrap();
@@ -97,114 +95,42 @@ fn handle_client(mut stream: UnixStream) -> std::io::Result<()> {
     Ok(())
 }
 
-fn execute_command(data: &serde_json::Value) -> Response {
-    let command = match data.get("command").and_then(|v| v.as_str()) {
-        Some(cmd) => cmd,
-        None => return Response {
-            success: false,
-            output: None,
-            error: Some("Missing command".to_string()),
-            exists: None,
-        },
+fn execute_command(data: &Value, config: &Config) -> Response {
+    // Extract parameters using helpers
+    let command = match params::extract_string(data, "command") {
+        Ok(cmd) => cmd,
+        Err(e) => return response::error(e),
     };
 
-    let session = data.get("session")
-        .and_then(|v| v.as_str())
-        .unwrap_or("archy_session");
+    let session = config.get_session(data);
 
-    let output = Command::new("tmux")
-        .args(&["send-keys", "-t", session, command, "C-m"])
-        .output();
-
-    match output {
-        Ok(result) => {
-            if result.status.success() {
-                Response {
-                    success: true,
-                    output: Some(format!("✓ Executed: {}", command)),
-                    error: None,
-                    exists: None,
-                }
-            } else {
-                Response {
-                    success: false,
-                    output: None,
-                    error: Some(String::from_utf8_lossy(&result.stderr).to_string()),
-                    exists: None,
-                }
-            }
-        }
-        Err(e) => Response {
-            success: false,
-            output: None,
-            error: Some(e.to_string()),
-            exists: None,
-        },
+    // Use tmux module for execution
+    match tmux::send_keys(session, &command) {
+        Ok(_) => response::success(format!("✓ Executed: {}", command)),
+        Err(e) => response::error(e),
     }
 }
 
-fn capture_tmux_output(data: &serde_json::Value) -> Response {
-    let lines = data.get("lines")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(100);
+fn capture_tmux_output(data: &Value, config: &Config) -> Response {
+    let lines = config.get_lines(data);
+    let session = config.get_session(data);
 
-    let session = data.get("session")
-        .and_then(|v| v.as_str())
-        .unwrap_or("archy_session");
-
-    let output = Command::new("tmux")
-        .args(&["capture-pane", "-pt", session, "-S", &format!("-{}", lines)])
-        .output();
-
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                Response {
-                    success: true,
-                    output: Some(String::from_utf8_lossy(&out.stdout).to_string()),
-                    error: None,
-                    exists: None,
-                }
-            } else {
-                Response {
-                    success: false,
-                    output: None,
-                    error: Some(String::from_utf8_lossy(&out.stderr).to_string()),
-                    exists: None,
-                }
-            }
-        }
-        Err(e) => Response {
-            success: false,
-            output: None,
-            error: Some(e.to_string()),
-            exists: None,
-        },
+    // Use tmux module for capture
+    match tmux::capture_pane(session, lines) {
+        Ok(output) => response::success(output),
+        Err(e) => response::error(e),
     }
 }
 
-fn check_tmux_session() -> Response {
-    let session = "archy_session";
+fn check_tmux_session(config: &Config) -> Response {
+    let session = &config.default_session;
 
-    let status = Command::new("tmux")
-        .args(&["has-session", "-t", session])
-        .status();
-
-    match status {
-        Ok(s) => Response {
-            success: s.success(),
-            output: None,
-            error: None,
-            exists: Some(s.success()),
-        },
-        Err(e) => Response {
-            success: false,
-            output: None,
-            error: Some(e.to_string()),
-            exists: Some(false),
-        },
-    }
+    // Use tmux module for session check
+    let exists = tmux::has_session(session);
+    response::exists(exists)
 }
+
+
 
 fn open_terminal() -> Response {
     let session = "archy_session";
@@ -812,49 +738,7 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
     }
 }
 
-fn launch_detached_command(data: &serde_json::Value) -> Response {
-    let command = match data.get("command").and_then(|v| v.as_str()) {
-        Some(cmd) => cmd,
-        None => return Response {
-            success: false,
-            output: None,
-            error: Some("Missing command parameter".to_string()),
-            exists: None,
-        },
-    };
 
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    if parts.is_empty() {
-        return Response {
-            success: false,
-            output: None,
-            error: Some("Empty command".to_string()),
-            exists: None,
-        };
-    }
-
-    // Try nohup to detach
-    let result = Command::new("nohup")
-        .args(&parts)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-
-    match result {
-        Ok(_) => Response {
-            success: true,
-            output: Some(format!("✓ App '{}' launched detached", parts[0])),
-            error: None,
-            exists: None,
-        },
-        Err(e) => Response {
-            success: false,
-            output: None,
-            error: Some(format!("Failed to launch app: {}", e)),
-            exists: None,
-        },
-    }
-}
 
 fn detect_terminal() -> Response {
     let terminals = vec![
@@ -999,31 +883,31 @@ fn execute_command_smart(data: &serde_json::Value) -> Response {
                 }
             }
 
-            // Execute in tmux
-            let exec_result = execute_command(&serde_json::json!({
-                "command": command,
-                "session": session
-            }));
+            // Execute in tmux using tmux module directly
+            match tmux::send_keys(session, command) {
+                Ok(_) => {
+                    // Ensure terminal window is open
+                    let foot_check = is_foot_running();
+                    if foot_check.exists != Some(true) {
+                        let _ = open_terminal();
+                        return Response {
+                            success: true,
+                            output: Some(format!("✓ Terminal reopened and command sent: {}", command)),
+                            error: None,
+                            exists: None,
+                        };
+                    }
 
-            if exec_result.success {
-                // Ensure terminal window is open
-                let foot_check = is_foot_running();
-                if foot_check.exists != Some(true) {
-                    let _ = open_terminal();
                     return Response {
                         success: true,
-                        output: Some(format!("✓ Terminal reopened and command sent: {}", command)),
+                        output: Some(format!("✓ Command sent to persistent terminal session: {}", command)),
                         error: None,
                         exists: None,
                     };
                 }
-
-                return Response {
-                    success: true,
-                    output: Some(format!("✓ Command sent to persistent terminal session: {}", command)),
-                    error: None,
-                    exists: None,
-                };
+                Err(_) => {
+                    // Fall through to terminal launch fallback
+                }
             }
         }
     }
@@ -1050,6 +934,7 @@ fn execute_command_smart(data: &serde_json::Value) -> Response {
         exists: None,
     }
 }
+
 
 /// Handle execute_analyzed action - executes command, waits, and returns analyzed output
 fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) -> std::io::Result<()> {

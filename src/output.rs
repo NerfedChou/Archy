@@ -9,6 +9,7 @@ use crate::formatter::{format_pretty, format_error, strip_colors};
 /// Complete output structure returned to Python
 #[derive(Debug, Serialize)]
 pub struct DisplayOutput {
+    pub success: bool,               // Quick boolean check for Python
     pub command: String,
     pub status: String,              // "success", "error", "timeout"
     pub exit_code: i32,
@@ -38,9 +39,12 @@ impl DisplayOutput {
 
         let display_plain = strip_colors(&display);
 
+        let is_success = exit_code == 0;
+
         DisplayOutput {
+            success: is_success,
             command: command.to_string(),
-            status: if exit_code == 0 { "success".to_string() } else { "error".to_string() },
+            status: if is_success { "success".to_string() } else { "error".to_string() },
             exit_code,
             structured: parsed.structured,
             findings: parsed.findings,
@@ -59,6 +63,7 @@ impl DisplayOutput {
         let display_plain = strip_colors(&display);
 
         DisplayOutput {
+            success: false,
             command: command.to_string(),
             status: "error".to_string(),
             exit_code: -1,
@@ -84,6 +89,7 @@ impl DisplayOutput {
         let display_plain = strip_colors(&display);
 
         DisplayOutput {
+            success: false,
             command: command.to_string(),
             status: "timeout".to_string(),
             exit_code: -1,
@@ -110,6 +116,7 @@ impl DisplayOutput {
         let display_plain = strip_colors(&display);
 
         DisplayOutput {
+            success: true,
             command: "".to_string(),
             status: "success".to_string(),
             exit_code: 0,

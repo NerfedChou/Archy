@@ -256,7 +256,9 @@ pub fn format_data_section(data: &Value) -> String {
             String::new()
         }
         _ => {
-            format_as_json(data)
+            // Don't show raw JSON to users - structured data is for AI internal use only
+            // If it's not table-like, just skip displaying it
+            String::new()
         }
     }
 }
