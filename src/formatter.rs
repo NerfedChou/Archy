@@ -333,3 +333,64 @@ pub fn format_metadata(metadata: &Metadata) -> String {
     output
 }
 
+/// Format batch execution result with AI-friendly summary
+pub fn format_batch_result(batch: &crate::batch::BatchExecutionResult) -> String {
+    let mut output = String::new();
+
+    // Header
+    output.push_str("\n");
+    output.push_str(&format!("{}\n", color_cyan("⚡ Executing commands in sequence...")));
+    output.push_str(&format!("{}\n\n", color_dim(&"─".repeat(60))));
+
+    // Command list
+    for cmd in &batch.commands {
+        output.push_str(&format!(
+            "{}\n",
+            color_cyan(&format!("[{}/{}] {}", cmd.index, batch.total_commands, cmd.command))
+        ));
+
+        if cmd.success {
+            output.push_str(&format!("  {}\n", color_green("✓ Completed")));
+        } else {
+            output.push_str(&format!(
+                "  {}\n",
+                color_red(&format!("✗ Failed: {}", cmd.error.as_ref().unwrap_or(&"Unknown error".to_string())))
+            ));
+        }
+    }
+
+    output.push_str(&format!("{}\n", color_dim(&"─".repeat(60))));
+
+    // AI Explanations section
+    output.push_str(&format!("\n{}\n", color_magenta("🤖 AI COMMAND EXPLANATIONS")));
+    output.push_str(&format!("{}\n\n", "=".repeat(60)));
+
+    for cmd in &batch.commands {
+        output.push_str(&format!("[{}] {}\n", cmd.index, color_bold(&cmd.command)));
+        if !cmd.explanation.is_empty() {
+            output.push_str(&format!("  📝 Explanation: {}\n", cmd.explanation));
+        } else {
+            output.push_str("  📝 Explanation: (AI explanation pending)\n");
+        }
+        output.push_str("\n");
+    }
+
+    // Summary
+    output.push_str(&format!("{}\n", "=".repeat(60)));
+    output.push_str(&format!("{}\n", color_yellow("💡 COMMAND SUMMARY")));
+    output.push_str(&format!("{}\n\n", "=".repeat(60)));
+
+    output.push_str(&format!(
+        "✓ {} completed successfully\n",
+        color_green(&format!("{}/{}", batch.successful, batch.total_commands))
+    ));
+
+    if batch.failed > 0 {
+        output.push_str(&format!(
+            "✗ {} failed\n",
+            color_red(&batch.failed.to_string())
+        ));
+    }
+
+    output
+}

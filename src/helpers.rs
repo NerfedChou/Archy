@@ -246,10 +246,92 @@ pub mod strings {
     }
 }
 
+/// Environment detection helpers
+pub mod environment {
+    use std::process::Command;
+
+    /// Detect the correct DISPLAY for the current session
+    /// First checks env var, then searches for active X displays
+    pub fn get_display() -> String {
+        // First, check if DISPLAY is already set in environment
+        if let Ok(display) = std::env::var("DISPLAY") {
+            if !display.is_empty() && display != ":0" && display != ":1" {
+                return display;
+            }
+        }
+
+        // Try to detect active X server display
+        // Check common X socket locations
+        for display_num in &["0", "1", "2", "10", "99"] {
+            let socket_path = format!("/tmp/.X11-unix/X{}", display_num);
+            if std::path::Path::new(&socket_path).exists() {
+                return format!(":{}", display_num);
+            }
+        }
+
+        // Try Wayland
+        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            eprintln!("⚠️  Using Wayland instead of X11");
+        }
+
+        // Fallback
+        eprintln!("⚠️  Could not detect active display, using default :0");
+        ":0".to_string()
+    }
+
+    /// Get XAUTHORITY file location
+    pub fn get_xauthority() -> String {
+        std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+            format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
+        })
+    }
+
+    /// Get proper DBUS address for the current session
+    pub fn get_dbus_address() -> String {
+        // Try to get from environment
+        if let Ok(addr) = std::env::var("DBUS_SESSION_BUS_ADDRESS") {
+            if !addr.is_empty() {
+                return addr;
+            }
+        }
+
+        // Try to detect using dbus-launch
+        if let Ok(output) = Command::new("dbus-launch")
+            .arg("--sh-syntax")
+            .output()
+        {
+            if let Ok(output_str) = String::from_utf8(output.stdout) {
+                for line in output_str.lines() {
+                    if line.starts_with("DBUS_SESSION_BUS_ADDRESS=") {
+                        if let Some(addr) = line.split('=').nth(1) {
+                            let addr = addr.trim_matches(';').trim_matches('\'').to_string();
+                            if !addr.is_empty() {
+                                return addr;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback
+        format!("unix:path=/run/user/{}/bus", unsafe {
+            libc::getuid()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_environment_detection() {
+        let display = environment::get_display();
+        assert!(!display.is_empty());
+        eprintln!("Detected DISPLAY: {}", display);
+    }
 
     #[test]
     fn test_response_builders() {

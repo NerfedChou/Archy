@@ -277,6 +277,28 @@ class RustExecutor:
             "terminal": terminal
         })
 
+    def batch_execute(self, commands: list[str], explanations: list[str] = None,
+                     session: str = "archy_session") -> Dict[str, Any]:
+        """
+        Execute multiple commands in sequence with AI explanations.
+
+        Args:
+            commands: List of commands to execute
+            explanations: Optional list of AI explanations (one per command)
+            session: Tmux session name
+
+        Returns:
+            Dictionary with batch result including all command outputs and explanations
+        """
+        data = {
+            "commands": commands,
+            "session": session
+        }
+        if explanations:
+            data["explanations"] = explanations
+
+        return self.send_command("batch_execute", data)
+
     def get_last_error(self) -> Optional[str]:
         """Get the last error message if any."""
         # This would need to be tracked in the class state

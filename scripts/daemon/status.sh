@@ -1,5 +1,5 @@
 #!/bin/bash
-# Check the status of the Archy Executor Daemon
+# Check the status of the Archy Rust Executor Daemon via systemd user service
 
 # Color codes
 GREEN='\033[0;32m'
