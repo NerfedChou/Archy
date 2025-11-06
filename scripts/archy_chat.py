@@ -11,6 +11,9 @@ import sys
 import os
 import re
 import importlib
+import shlex
+import hashlib
+from threading import Lock
 from typing import Generator
 from pathlib import Path
 
@@ -27,7 +30,7 @@ except Exception:
 load_dotenv()
 
 # Precompile EXECUTE_COMMAND regex to avoid redundant-escape warnings
-EXEC_CMD_RE = re.compile(re.escape('[') + r'EXECUTE_COMMAND:\s*(.+?)' + re.escape(']'))
+EXEC_CMD_RE = re.compile(r'\[EXECUTE_COMMAND:\s*([^]]+)]')
 
 # Load .api file if present to override secrets
 api_file = Path(__file__).resolve().parents[1] / '.api'
@@ -53,13 +56,15 @@ class ArchyChat:
 
         self.conversation_history = []
         self.terminal_history = []  # Track all terminal outputs for context
+        self._history_lock = Lock()
+        self.MAX_HISTORY = 100
 
         # Initialize Rust executor for system operations
         self.rust_executor = RustExecutor()
 
         # Validate Gemini API key
-        if not self.gemini_api_key:
-            raise RuntimeError("❌ GEMINI_API_KEY not found in environment. Please set it in .env or .api file")
+        if not self.gemini_api_key or len(self.gemini_api_key.strip()) < 20:
+            raise RuntimeError("❌ GEMINI_API_KEY is missing or invalid. Please set it in .env or .api file")
 
         self.system_prompt = """You are Archy, an AI system wizard and Master Angulo's tech sidekick. Think of yourself as that cool, witty friend who actually knows their way around a computer and isn't afraid to throw in some humor btw you are default as girl like a tsundere one.
 
@@ -358,8 +363,11 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
     def cleanup(self):
         """Clean up resources when Archy exits"""
-        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-        self.rust_executor.close_session(session)
+        try:
+            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+            self.rust_executor.close_session(session)
+        except Exception as e:
+            print(f"\033[91m⚠️ Cleanup error: {e}\033[0m", file=sys.stderr)
 
     def reset_state(self):
         """Reset conversation and terminal history."""
@@ -433,10 +441,8 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         if len(self.terminal_history) > 1:
             analysis_prompt += "\n\nYou can reference previous command results if relevant."
 
-        self.conversation_history.append({
-            "role": "user",
-            "content": analysis_prompt
-        })
+        with self._history_lock:
+            self.add_to_conversation("user", analysis_prompt)
 
         # Generate analysis response
         yield "\n\033[92m📊 AI Analysis:\033[0m\n\n"
@@ -558,7 +564,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             return  # Don't send to AI, action already done
 
         # Add user message to history (use processed input for better AI understanding)
-        self.conversation_history.append({"role": "user", "content": processed_input})
+        self.add_to_conversation("user", processed_input)
 
         # Build system context with recent command history
         context = f"\n\n[System Context: {self.rust_executor.get_system_info()}]\n[{self.get_available_tools()}]"
@@ -606,7 +612,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 yield chunk  # ← YIELD to the caller so they can display it!
 
             # Add assistant response to history
-            self.conversation_history.append({"role": "assistant", "content": full_response})
+            self.add_to_conversation("assistant", full_response)
 
             # 🔍 Smart Detection: Check if AI is talking about actions without using tags
             response_lower = full_response.lower()
@@ -714,14 +720,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             commands_to_run = [match.group(1).strip() for match in command_matches]
 
             # CRITICAL: Deduplicate commands to prevent double execution
-            # If AI accidentally includes the same command twice, only run it once
-            seen_commands = set()
-            unique_commands = []
-            for cmd in commands_to_run:
-                if cmd not in seen_commands:
-                    seen_commands.add(cmd)
-                    unique_commands.append(cmd)
-            commands_to_run = unique_commands
+            commands_to_run = self.deduplicate_commands(commands_to_run)
 
             if commands_to_run:
                 # 🎯 BATCH EXECUTION: Ensure terminal is ready for multiple commands
@@ -756,13 +755,17 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         continue
 
                     # Check if GUI or CLI
-                    parts = command.split()
-                    if parts:
-                        app_name = parts[0].split('/')[-1]
-                        if self.rust_executor.find_desktop_entry(app_name):
-                            gui_apps.append(command)
-                        else:
-                            cli_commands.append(command)
+                    try:
+                        parts = shlex.split(command)
+                        if parts:
+                            app_name = parts[0].split('/')[-1]
+                            if self.rust_executor.find_desktop_entry(app_name):
+                                gui_apps.append(command)
+                            else:
+                                cli_commands.append(command)
+                    except ValueError:
+                        yield f"\n\033[91m❌ Invalid command syntax: {command}\033[0m\n"
+                        continue
 
                 # Launch all GUI apps (non-blocking)
                 for gui_cmd in gui_apps:
@@ -800,12 +803,13 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                             yield f"\n{display}\n"
 
                         # Store STRUCTURED data in terminal history
-                        self.terminal_history.append({
-                            "command": command,
-                            "structured": result.get('structured', {}),
-                            "findings": result.get('findings', []),
-                            "summary": result.get('summary', '')
-                        })
+                        with self._history_lock:
+                            self.terminal_history.append({
+                                "command": command,
+                                "structured": result.get('structured', {}),
+                                "findings": result.get('findings', []),
+                                "summary": result.get('summary', '')
+                            })
 
                         # CRITICAL: Add the command output to conversation history so AI remembers REAL results
                         output_context = f"\n[Command '{command}' completed]\n"
@@ -823,10 +827,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                                     output_context += f"  - {str(finding)}\n"
 
                         # Add to conversation so AI remembers the REAL output
-                        self.conversation_history.append({
-                            "role": "user",
-                            "content": output_context
-                        })
+                        self.add_to_conversation("user", output_context)
 
                         # ✨ Trigger AI analysis after command completes (only for last command in batch)
                         if idx == len(cli_commands):
@@ -839,10 +840,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                             analysis_request += "3. **🔒 Security Notes:** Any security concerns? (only if relevant)\n"
 
                             # Add to conversation
-                            self.conversation_history.append({
-                                "role": "user",
-                                "content": analysis_request
-                            })
+                            self.add_to_conversation("user", analysis_request)
 
                             # Generate AI analysis
                             for chunk in self._generate_analysis_response():
@@ -854,8 +852,10 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
         except requests.exceptions.RequestException as e:
             yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
+            self.add_to_conversation("system", f"Error: API request failed: {e}")
         except Exception as e:
             yield f"\033[91m❌ Archy Error: An unexpected error occurred: {e}\033[0m"
+            self.add_to_conversation("system", f"Error: An unexpected error occurred: {e}")
 
     def _stream_and_collect_response(self, response: requests.Response) -> Generator[str, None, None]:
         """Helper to stream response chunks from the Gemini API."""
@@ -924,7 +924,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 yield chunk
 
             # Add the analysis to conversation history
-            self.conversation_history.append({"role": "assistant", "content": full_analysis})
+            self.add_to_conversation("assistant", full_analysis)
 
         except requests.exceptions.RequestException as e:
             yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
@@ -933,7 +933,13 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
     def get_system_info(self) -> str:
         """Get system information via Rust executor"""
-        return self.rust_executor.get_system_info()
+        try:
+            result = self.rust_executor.get_system_info()
+            if result and len(result) < 500:  # Sanity check
+                return result
+            return "System info unavailable"
+        except Exception as e:
+            return f"Error getting system info: {str(e)[:100]}"
 
     def check_command_available(self, command: str) -> bool:
         """Check if a command is available on the system via Rust executor"""
@@ -953,7 +959,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         history_str = "\n\033[93m=== Terminal History ===\033[0m\n"
         for idx, item in enumerate(self.terminal_history, 1):
             history_str += f"\n\033[94m[{idx}] Command: {item['command']}\033[0m\n"
-            output_preview = item['output'][:300] + "..." if len(item['output']) > 300 else item['output']
+            output_preview = item.get('summary', 'No summary')[:300]
             history_str += f"{output_preview}\n"
         return history_str
 
@@ -1079,6 +1085,25 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         finally:
             # Clean up resources when exiting
             self.cleanup()
+
+    def add_to_conversation(self, role: str, content: str):
+        """Add a message to the conversation history, enforcing a size limit."""
+        with self._history_lock:
+            self.conversation_history.append({"role": role, "content": content})
+            if len(self.conversation_history) > self.MAX_HISTORY:
+                # Keep the system prompt and the last MAX_HISTORY-1 messages
+                self.conversation_history = self.conversation_history[-self.MAX_HISTORY:]
+
+    def deduplicate_commands(self, commands: list[str]) -> list[str]:
+        """Remove exact duplicates while preserving order using hashing."""
+        seen = set()
+        unique = []
+        for cmd in commands:
+            cmd_hash = hashlib.md5(cmd.encode()).hexdigest()
+            if cmd_hash not in seen:
+                seen.add(cmd_hash)
+                unique.append(cmd)
+        return unique
 
 
 def main():

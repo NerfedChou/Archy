@@ -30,6 +30,7 @@ class RustExecutor:
         """
         try:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(10.0)  # 10-second timeout for connection and receive
             client.connect(self.socket_path)
             
             message = json.dumps({"action": action, "data": data})
@@ -37,14 +38,21 @@ class RustExecutor:
             
             # Receive response in chunks to handle large outputs
             response_data = b''
-            while True:
-                chunk = client.recv(8192)
-                if not chunk:
-                    break
-                response_data += chunk
+            max_response_size = 10 * 1024 * 1024  # 10MB limit
+            while len(response_data) < max_response_size:
+                try:
+                    chunk = client.recv(8192)
+                    if not chunk:
+                        break
+                    response_data += chunk
+                except socket.timeout:
+                    break  # Stop receiving if timeout is reached
 
             client.close()
-            
+
+            if not response_data:
+                return {"success": False, "error": "No response from executor (timeout or empty response)"}
+
             response = response_data.decode('utf-8', errors='replace')
             return json.loads(response)
         except FileNotFoundError:
@@ -57,6 +65,8 @@ class RustExecutor:
                 "success": False,
                 "error": "Rust executor daemon not running (stale socket). Please start it with: ./start_daemon.sh"
             }
+        except socket.timeout:
+            return {"success": False, "error": "Socket connection timeout"}
         except Exception as e:
             return {"success": False, "error": str(e)}
     
@@ -100,14 +110,14 @@ class RustExecutor:
         return result.get("exists", False)
 
     def get_system_info(self) -> str:
-        """Get system information (uname -a)."""
+        """Get system information from the Rust executor."""
         result = self.send_command("get_system_info", {})
         return result.get("output", "System info unavailable")
 
     def find_desktop_entry(self, app_name: str) -> Optional[str]:
-        """Find a desktop entry file for an application."""
+        """Find the desktop entry for a given application name."""
         result = self.send_command("find_desktop_entry", {"app_name": app_name})
-        if result.get("exists", False):
+        if result.get("success") and result.get("exists"):
             return result.get("output")
         return None
 
@@ -141,18 +151,8 @@ class RustExecutor:
         return (success, output)
 
     def execute_command_smart(self, command: str, session: str = "archy_session") -> Dict[str, Any]:
-        """
-        Smart command execution - automatically handles:
-        - GUI apps (via desktop entries)
-        - CLI commands (via tmux)
-        - Fallback to new terminal window
-
-        This is the recommended way to execute commands as it handles all cases.
-        """
-        return self.send_command("execute_smart", {
-            "command": command,
-            "session": session
-        })
+        """Execute a command smartly (GUI or CLI)."""
+        return self.send_command("execute_smart", {"command": command, "session": session})
 
     def launch_gui_app(self, desktop_entry: str) -> Dict[str, Any]:
         """Launch a GUI application using its desktop entry."""
@@ -179,14 +179,8 @@ class RustExecutor:
             "interval_ms": interval_ms
         })
 
-    def capture_analyzed(self, command: str = "", lines: int = 100,
-                        session: str = "archy_session") -> Dict[str, Any]:
-        """
-        Capture and analyze current terminal output.
-        Returns the same DisplayOutput structure as execute_analyzed.
-
-        Use this for checking long-running commands or manual command output.
-        """
+    def capture_analyzed(self, command: str, lines: int, session: str) -> Dict[str, Any]:
+        """Capture and analyze terminal output."""
         return self.send_command("capture_analyzed", {
             "command": command,
             "lines": lines,
