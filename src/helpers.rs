@@ -3,6 +3,120 @@
 
 use serde::{Serialize};
 use serde_json::Value;
+use std::os::unix::net::UnixStream;
+use std::io::Write;
+
+// ...existing code...
+
+/// Security helpers - Input validation and output sanitization
+pub mod security {
+    use super::*;
+
+    /// Safely serialize and send JSON response, prevents unwrap() panics (FIX #1)
+    pub fn safe_json_response(response: &Response, stream: &mut UnixStream) -> std::io::Result<()> {
+        match serde_json::to_string(response) {
+            Ok(json) => {
+                stream.write_all(json.as_bytes())?;
+                stream.flush()?;
+            }
+            Err(e) => {
+                eprintln!("❌ JSON serialization failed: {}", e);
+                let fallback = r#"{"success":false,"error":"Internal serialization error"}"#;
+                let _ = stream.write_all(fallback.as_bytes());
+                let _ = stream.flush();
+            }
+        }
+        let _ = stream.shutdown(std::net::Shutdown::Both);
+        Ok(())
+    }
+
+    /// Escape special characters in pgrep patterns to prevent regex injection (FIX #3)
+    pub fn escape_pgrep_pattern(s: &str) -> String {
+        s.replace('\\', "\\\\")
+         .replace('.', "\\.")
+         .replace('*', "\\*")
+         .replace('+', "\\+")
+         .replace('?', "\\?")
+         .replace('[', "\\[")
+         .replace(']', "\\]")
+         .replace('(', "\\(")
+         .replace(')', "\\)")
+         .replace('{', "\\{")
+         .replace('}', "\\}")
+         .replace('|', "\\|")
+         .replace('^', "\\^")
+         .replace('$', "\\$")
+    }
+
+    /// Validate that a path is safe to execute (prevents command injection) (FIX #6)
+    pub fn is_safe_executable_path(path: &str) -> bool {
+        // Allowed prefixes for executables
+        let allowed_prefixes = ["/usr/", "/bin/", "/usr/local/bin/", "/opt/", "/snap/bin/"];
+        let is_allowed_prefix = allowed_prefixes.iter().any(|prefix| path.starts_with(prefix));
+
+        if !is_allowed_prefix {
+            return false;
+        }
+
+        // Verify file exists and is executable
+        if let Ok(metadata) = std::fs::metadata(path) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                return metadata.permissions().mode() & 0o111 != 0;
+            }
+            #[cfg(not(unix))]
+            return true;
+        }
+
+        false
+    }
+
+    /// Validate command for dangerous patterns
+    pub fn validate_command(command: &str) -> Result<(), String> {
+        // Check for null bytes (common injection vector)
+        if command.contains('\0') {
+            return Err("Invalid command: contains null byte".to_string());
+        }
+
+        // Limit command length to prevent buffer overflow
+        if command.len() > 8192 {
+            return Err("Command too long (max 8192 characters)".to_string());
+        }
+
+        // Blacklist extremely dangerous patterns
+        let dangerous_patterns = [
+            "rm -rf /",
+            "rm -rf /*",
+            "> /dev/sda",
+            "dd if=/dev/zero of=/dev/sda",
+            "mkfs.",
+            ":(){ :|:& };:",  // Fork bomb
+        ];
+
+        let command_lower = command.to_lowercase();
+        for pattern in &dangerous_patterns {
+            if command_lower.contains(pattern) {
+                return Err(format!("Blocked dangerous command pattern: {}", pattern));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate desktop entry name to prevent directory traversal
+    pub fn validate_desktop_entry(entry: &str) -> Result<(), String> {
+        if entry.contains('/') || entry.contains("..") || entry.contains('\0') {
+            return Err("Invalid desktop_entry: contains illegal characters".to_string());
+        }
+
+        if entry.len() > 255 {
+            return Err("Invalid desktop_entry: too long".to_string());
+        }
+
+        Ok(())
+    }
+}
 
 /// Standard Response structure
 #[derive(Serialize)]

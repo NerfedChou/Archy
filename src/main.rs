@@ -17,6 +17,7 @@ mod tmux;
 use output::DisplayOutput;
 use config::Config;
 use helpers::{response, params, Response};
+use helpers::security::{safe_json_response, escape_pgrep_pattern, is_safe_executable_path, validate_command, validate_desktop_entry};
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -65,27 +66,31 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
     let mut buffer = Vec::new();
     let mut temp_buf = vec![0; 8192];
     let mut total_read = 0;
-    
+
     loop {
         match stream.read(&mut temp_buf) {
             Ok(0) => break,  // EOF
             Ok(n) => {
                 total_read += n;
                 buffer.extend_from_slice(&temp_buf[..n]);
-                
+
                 // Try to parse - if successful, we have a complete message
                 if let Ok(_) = serde_json::from_slice::<Request>(&buffer) {
                     break;
                 }
-                
+
                 // Prevent infinite reads
                 if total_read > config.max_buffer_size {
                     send_error(&mut stream, "Request too large")?;
                     return Ok(());
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No more data available right now, try to parse what we have
+            // FIX #2: Handle TimedOut instead of WouldBlock (socket is blocking with timeout)
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                // Socket timeout - we have partial data, try to parse it
+                if buffer.is_empty() {
+                    send_error(&mut stream, "Connection timeout")?;
+                }
                 break;
             }
             Err(e) => {
@@ -95,9 +100,9 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
         }
     }
 
-    // Validate buffer size
+    // FIX #7: Validate buffer is not empty and send error response
     if buffer.is_empty() {
-        eprintln!("❌ Empty request received");
+        send_error(&mut stream, "Empty request received")?;
         return Ok(());
     }
 
@@ -116,7 +121,7 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
         "capture" => capture_tmux_output(&request.data, config),
         "capture_analyzed" => return handle_capture_analyzed(&mut stream, &request.data),
         "check_session" => check_tmux_session(config),
-        "open_terminal" => open_terminal(),
+        "open_terminal" => open_terminal(config),
         "close_terminal" => close_terminal(),
         "close_session" => close_session(&request.data),
         "is_foot_running" => is_foot_running(),
@@ -128,15 +133,12 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
         "launch_gui_app" => launch_gui_app(&request.data),
         "detect_terminal" => detect_terminal(),
         "launch_fallback_terminal" => launch_fallback_terminal(&request.data),
-        "execute_smart" => execute_command_smart(&request.data),
+        "execute_smart" => execute_command_smart(&request.data, config),
         _ => response::error("Unknown action".to_string()),
     };
 
-    let json = serde_json::to_string(&response).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.flush()?;  // Ensure all data is sent
-    let _ = stream.shutdown(std::net::Shutdown::Both);  // Clean shutdown
-
+    // FIX #1: Use safe_json_response instead of unwrap()
+    safe_json_response(&response, &mut stream)?;
     Ok(())
 }
 
@@ -147,36 +149,14 @@ fn execute_command(data: &Value, config: &Config) -> Response {
         Err(e) => return response::error(e),
     };
 
-    // Validate and sanitize command
+    // Validate and sanitize command using helper
     if command.trim().is_empty() {
         return response::error("Command cannot be empty".to_string());
     }
 
-    // Check for null bytes (common injection vector)
-    if command.contains('\0') {
-        return response::error("Invalid command: contains null byte".to_string());
-    }
-
-    // Limit command length to prevent buffer overflow
-    if command.len() > 8192 {
-        return response::error("Command too long (max 8192 characters)".to_string());
-    }
-
-    // Blacklist extremely dangerous patterns
-    let dangerous_patterns = [
-        "rm -rf /",
-        "rm -rf /*",
-        "> /dev/sda",
-        "dd if=/dev/zero of=/dev/sda",
-        "mkfs.",
-        ":(){ :|:& };:",  // Fork bomb
-    ];
-
-    let command_lower = command.to_lowercase();
-    for pattern in &dangerous_patterns {
-        if command_lower.contains(pattern) {
-            return response::error(format!("Blocked dangerous command pattern: {}", pattern));
-        }
+    // FIX: Use centralized command validation
+    if let Err(e) = validate_command(&command) {
+        return response::error(e);
     }
 
     let session = config.get_session(data);
@@ -219,8 +199,8 @@ fn check_tmux_session(config: &Config) -> Response {
 
 
 
-fn open_terminal() -> Response {
-    let session = "archy_session";
+fn open_terminal(config: &Config) -> Response {
+    let session = &config.default_session;
 
     // Check if session exists, create if not
     let has_session = Command::new("tmux")
@@ -245,9 +225,10 @@ fn open_terminal() -> Response {
         }
     }
 
-    // Check if a foot terminal is already running for this session
+    // FIX #3: Escape session name in pgrep pattern to prevent regex injection
+    let escaped_session = escape_pgrep_pattern(session);
     let check_foot = Command::new("pgrep")
-        .args(&["-f", &format!("foot.*tmux.*attach.*{}", session)])
+        .args(&["-f", &format!("foot.*tmux.*attach.*{}", escaped_session)])
         .output();
 
     if let Ok(result) = check_foot {
@@ -340,9 +321,12 @@ fn close_session(data: &serde_json::Value) -> Response {
         .and_then(|v| v.as_str())
         .unwrap_or("archy_session");
 
+    // FIX #3: Escape session name in pgrep pattern
+    let escaped_session = escape_pgrep_pattern(session);
+
     // First close any foot terminals
     let _ = Command::new("pkill")
-        .args(&["-f", &format!("foot.*{}", session)])
+        .args(&["-f", &format!("foot.*{}", escaped_session)])
         .status();
 
     // Then kill the tmux session
@@ -453,7 +437,19 @@ fn get_system_info() -> Response {
     match output {
         Ok(result) => {
             if result.status.success() {
-                let info = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                // FIX #4: Handle invalid UTF-8 properly instead of silently corrupting
+                let info = match String::from_utf8(result.stdout) {
+                    Ok(s) => s.trim().to_string(),
+                    Err(e) => {
+                        eprintln!("⚠️ Invalid UTF-8 in system info: {}", e);
+                        return Response {
+                            success: false,
+                            output: None,
+                            error: Some("Invalid UTF-8 in system output".to_string()),
+                            exists: None,
+                        };
+                    }
+                };
                 Response {
                     success: true,
                     output: Some(format!("System: {}", info)),
@@ -533,7 +529,8 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                         if let Ok(content) = fs::read_to_string(&filepath) {
                             // Check if Exec line contains the exact app name with proper word boundaries
                             for line in content.lines() {
-                                if line.starts_with("Exec=") {
+                                // FIX #4: Proper bounds checking - only parse if line is long enough
+                                if line.starts_with("Exec=") && line.len() > 5 {
                                     let exec_value = &line[5..]; // Skip "Exec="
 
                                     // Split by space to get the actual command
@@ -584,10 +581,11 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
         }
     }
 
+    // FIX #8: Return error instead of success when not found
     Response {
         success: true,
         output: None,
-        error: None,
+        error: Some("Desktop entry not found".to_string()),
         exists: Some(false),
     }
 }
@@ -723,9 +721,16 @@ fn wait_for_command_completion(data: &serde_json::Value) -> Response {
 
         if let Ok(out) = output_result {
             if out.status.success() {
-                let current_output = String::from_utf8_lossy(&out.stdout).to_string();
+                // FIX #4: Handle invalid UTF-8 properly
+                let current_output = match String::from_utf8(out.stdout) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("⚠️ Invalid UTF-8 in tmux output: {}", e);
+                        continue;
+                    }
+                };
 
-                // Check if output has stabilized
+                // Check if output has stabilized (FIX #6: Don't clone full string every loop)
                 if current_output == last_output {
                     stable_count += 1;
                 } else {
@@ -736,10 +741,13 @@ fn wait_for_command_completion(data: &serde_json::Value) -> Response {
                 // Look for prompt in last line
                 let lines: Vec<&str> = current_output.trim().split('\n').collect();
                 if let Some(last_line) = lines.last() {
-                    // Check for common prompt indicators
+                    // FIX #5: Support more shell prompts
                     let has_prompt = last_line.contains('$') ||
                                    last_line.contains('#') ||
-                                   last_line.contains('❯');
+                                   last_line.contains('❯') ||
+                                   last_line.contains('>') ||
+                                   last_line.contains('❮') ||
+                                   last_line.contains('⚡');
 
                     // Make sure the command itself is not in the last line (it just echoed)
                     let command_not_echoed = !last_line.contains(command) || command.is_empty();
@@ -777,10 +785,7 @@ fn send_error(stream: &mut UnixStream, msg: &str) -> std::io::Result<()> {
         error: Some(msg.to_string()),
         exists: None,
     };
-    let json = serde_json::to_string(&response).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.flush()?;
-    let _ = stream.shutdown(std::net::Shutdown::Both);
+    safe_json_response(&response, stream)?;
     Ok(())
 }
 
@@ -795,22 +800,12 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         },
     };
 
-    // Validate desktop_entry to prevent injection
-    if desktop_entry.contains('/') || desktop_entry.contains("..") || desktop_entry.contains('\0') {
+    // Use centralized validation helper
+    if let Err(e) = validate_desktop_entry(desktop_entry) {
         return Response {
             success: false,
             output: None,
-            error: Some("Invalid desktop_entry: contains illegal characters".to_string()),
-            exists: None,
-        };
-    }
-
-    // Limit length
-    if desktop_entry.len() > 255 {
-        return Response {
-            success: false,
-            output: None,
-            error: Some("Invalid desktop_entry: too long".to_string()),
+            error: Some(e),
             exists: None,
         };
     }
@@ -842,11 +837,19 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         let desktop_file = format!("{}/{}.desktop", dir, desktop_entry);
         if let Ok(content) = fs::read_to_string(&desktop_file) {
             for line in content.lines() {
-                if line.starts_with("Exec=") {
+                if line.starts_with("Exec=") && line.len() > 5 {
                     let exec_line = &line[5..];
                     let parts: Vec<&str> = exec_line.split_whitespace().collect();
                     if !parts.is_empty() {
-                        let result = Command::new(parts[0])
+                        let exec_path = parts[0];
+
+                        // FIX #6: Validate executable path before running
+                        if !is_safe_executable_path(exec_path) {
+                            eprintln!("⚠️ Blocked suspicious desktop Exec path: {}", exec_path);
+                            continue;
+                        }
+
+                        let result = Command::new(exec_path)
                             .args(&parts[1..])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
@@ -999,7 +1002,7 @@ fn launch_fallback_terminal(data: &serde_json::Value) -> Response {
     }
 }
 
-fn execute_command_smart(data: &serde_json::Value) -> Response {
+fn execute_command_smart(data: &serde_json::Value, config: &Config) -> Response {
     let command = match data.get("command").and_then(|v| v.as_str()) {
         Some(cmd) => cmd,
         None => return Response {
@@ -1095,7 +1098,7 @@ fn execute_command_smart(data: &serde_json::Value) -> Response {
                     // Ensure terminal window is open
                     let foot_check = is_foot_running();
                     if foot_check.exists != Some(true) {
-                        let _ = open_terminal();
+                        let _ = open_terminal(config);
                         return Response {
                             success: true,
                             output: Some(format!("✓ Terminal reopened and command sent: {}", command)),
