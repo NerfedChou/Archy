@@ -13,8 +13,8 @@ import re
 import importlib
 import shlex
 import hashlib
-from threading import Lock
-from typing import Generator
+from threading import Lock, Thread
+from typing import Generator, Optional, Dict, Any
 from pathlib import Path
 
 # Import Rust executor for system operations
@@ -378,7 +378,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
     def analyze_latest_terminal_output(self, command_hint: str = "last command") -> Generator[str, None, None]:
         """Manually capture and analyze the latest terminal output.
         This is useful for long-running commands that have finished but weren't auto-analyzed.
-        NOW USES RUST-BASED PARSING AND FORMATTING!"""
+        NOW USES RUST-BASED PARSING AND FORMATTING WITH TIMEOUT PROTECTION!"""
         session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
 
         if not self.check_command_available('tmux'):
@@ -389,12 +389,35 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             yield "\033[91m❌ No active terminal session found\033[0m\n"
             return
 
-        # NEW WAY: Use Rust's capture_analyzed - it does ALL the work!
-        result = self.rust_executor.capture_analyzed(
-            command=command_hint,
-            lines=200,
-            session=session
-        )
+        # Use a timeout wrapper to prevent hanging on unresponsive daemon
+        result: Optional[Dict[str, Any]] = None
+        error_msg: Optional[str] = None
+
+        def _capture_with_timeout():
+            nonlocal result, error_msg
+            try:
+                # NEW WAY: Use Rust's capture_analyzed - it does ALL the work!
+                result = self.rust_executor.capture_analyzed(
+                    command=command_hint,
+                    lines=200,
+                    session=session
+                )
+            except Exception as e:
+                error_msg = str(e)
+
+        # Run capture in a thread with 5-second timeout
+        capture_thread = Thread(target=_capture_with_timeout, daemon=True)
+        capture_thread.start()
+        capture_thread.join(timeout=5.0)
+
+        if capture_thread.is_alive():
+            yield "\033[93m⚠️ Capture timed out (daemon may be unresponsive)\033[0m\n"
+            yield "\033[94mℹ️ Try restarting the daemon: systemctl --user restart archy-executor-user\033[0m\n"
+            return
+
+        if error_msg:
+            yield f"\033[91m❌ Error: {error_msg}\033[0m\n"
+            return
 
         # Check if we got valid structured output
         if not result or result.get('status') == 'error':
@@ -415,39 +438,29 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             "summary": result.get('summary', '')
         })
 
-        # Build analysis prompt with STRUCTURED data (not raw text!)
-        analysis_prompt = f"[Latest terminal output from '{command_hint}']:\n\n"
-        analysis_prompt += f"**Summary:** {result.get('summary', 'No summary')}\n\n"
-
-        # Include findings
+        # Already have findings from Rust - no need for extra AI analysis!
+        # Rust already did the intelligent parsing, just display it
         findings = result.get('findings', [])
         if findings:
-            analysis_prompt += "**Key Findings:**\n"
+            yield "\n\033[92m📊 Key Findings:\033[0m\n"
             for finding in findings:
-                analysis_prompt += f"- {finding.get('category', 'Info')}: {finding.get('message', '')}\n"
-            analysis_prompt += "\n"
+                importance = finding.get('importance', 'Info')
+                category = finding.get('category', 'Info')
+                message = finding.get('message', '')
 
-        # Note: Structured data is kept internal, not shown to user or in prompts
-        # The findings and summary are sufficient for AI analysis
+                # Color code by importance
+                if importance == 'Critical':
+                    color = "\033[91m"  # Red
+                    icon = "🔴"
+                elif importance == 'High':
+                    color = "\033[93m"  # Yellow
+                    icon = "🟠"
+                else:
+                    color = "\033[94m"  # Blue
+                    icon = "ℹ️"
 
-        analysis_prompt += "**ANALYSIS REQUIRED:**\n"
-        analysis_prompt += "Based on the structured output above, provide:\n\n"
-        analysis_prompt += "1. **💡 Interpretation:** What does this mean? (1-2 sentences)\n"
-        analysis_prompt += "2. **🎯 Next Steps:** Actionable recommendations\n"
-        analysis_prompt += "3. **🔒 Security Notes:** (ONLY if findings include security concerns)\n"
-        analysis_prompt += "4. **📚 Related Topics:** (Optional) Topics to explore\n\n"
-        analysis_prompt += "Keep it concise and actionable!"
+                yield f"{color}{icon} {category}: {message}\033[0m\n"
 
-        if len(self.terminal_history) > 1:
-            analysis_prompt += "\n\nYou can reference previous command results if relevant."
-
-        with self._history_lock:
-            self.add_to_conversation("user", analysis_prompt)
-
-        # Generate analysis response
-        yield "\n\033[92m📊 AI Analysis:\033[0m\n\n"
-        for chunk in self._generate_analysis_response():
-            yield chunk
         yield "\n"
 
     def get_command_explanation(self, command: str) -> str:
