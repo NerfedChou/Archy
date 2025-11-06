@@ -40,21 +40,9 @@ fn main() -> std::io::Result<()> {
     println!("   • Buffer size: {}", config.max_buffer_size);
     println!("✅ Ready to handle system operations...\n");
 
-    // Simple rate limiting: track last connection time
-    use std::time::{Instant, Duration};
-    let mut last_connection = Instant::now();
-    let min_interval = Duration::from_millis(10); // Max 100 connections/sec
-
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                // Basic rate limiting
-                let now = Instant::now();
-                if now.duration_since(last_connection) < min_interval {
-                    eprintln!("⚠️ Rate limit: connection too fast, ignoring");
-                    continue;
-                }
-                last_connection = now;
 
                 if let Err(e) = handle_client(stream, &config) {
                     eprintln!("❌ Client handler error: {}", e);
@@ -73,28 +61,47 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
 
-    let mut buffer = vec![0; config.max_buffer_size];
-
-    let size = match stream.read(&mut buffer) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("❌ Read error: {}", e);
-            return Ok(());
+    // Read the full request (handle partial reads)
+    let mut buffer = Vec::new();
+    let mut temp_buf = vec![0; 8192];
+    let mut total_read = 0;
+    
+    loop {
+        match stream.read(&mut temp_buf) {
+            Ok(0) => break,  // EOF
+            Ok(n) => {
+                total_read += n;
+                buffer.extend_from_slice(&temp_buf[..n]);
+                
+                // Try to parse - if successful, we have a complete message
+                if let Ok(_) = serde_json::from_slice::<Request>(&buffer) {
+                    break;
+                }
+                
+                // Prevent infinite reads
+                if total_read > config.max_buffer_size {
+                    send_error(&mut stream, "Request too large")?;
+                    return Ok(());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // No more data available right now, try to parse what we have
+                break;
+            }
+            Err(e) => {
+                eprintln!("❌ Read error: {}", e);
+                return Ok(());
+            }
         }
-    };
+    }
 
     // Validate buffer size
-    if size == 0 {
+    if buffer.is_empty() {
         eprintln!("❌ Empty request received");
         return Ok(());
     }
 
-    if size >= config.max_buffer_size {
-        send_error(&mut stream, "Request too large")?;
-        return Ok(());
-    }
-
-    let request: Request = match serde_json::from_slice(&buffer[..size]) {
+    let request: Request = match serde_json::from_slice(&buffer) {
         Ok(req) => req,
         Err(e) => {
             send_error(&mut stream, &format!("Invalid JSON: {}", e))?;
@@ -127,6 +134,8 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
 
     let json = serde_json::to_string(&response).unwrap();
     stream.write_all(json.as_bytes())?;
+    stream.flush()?;  // Ensure all data is sent
+    let _ = stream.shutdown(std::net::Shutdown::Both);  // Clean shutdown
 
     Ok(())
 }
@@ -171,6 +180,16 @@ fn execute_command(data: &Value, config: &Config) -> Response {
     }
 
     let session = config.get_session(data);
+
+    // Ensure session exists before sending command
+    if !tmux::has_session(session) {
+        if let Err(e) = tmux::new_session(session) {
+            eprintln!("⚠️ Failed to create session {}: {}", session, e);
+            return response::error(format!("Failed to create tmux session: {}", e));
+        }
+        // Brief wait for session initialization
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     // Use tmux module for execution
     match tmux::send_keys(session, &command) {
@@ -759,7 +778,10 @@ fn send_error(stream: &mut UnixStream, msg: &str) -> std::io::Result<()> {
         exists: None,
     };
     let json = serde_json::to_string(&response).unwrap();
-    stream.write_all(json.as_bytes())
+    stream.write_all(json.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    Ok(())
 }
 
 fn launch_gui_app(data: &serde_json::Value) -> Response {
@@ -1128,6 +1150,8 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
             let output = DisplayOutput::from_error("", "Missing command parameter");
             let json = serde_json::to_string(&output).unwrap();
             stream.write_all(json.as_bytes())?;
+            stream.flush()?;
+            let _ = stream.shutdown(std::net::Shutdown::Both);
             return Ok(());
         }
     };
@@ -1145,6 +1169,8 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
         let output = DisplayOutput::from_error(command, &e.to_string());
         let json = serde_json::to_string(&output).unwrap();
         stream.write_all(json.as_bytes())?;
+        stream.flush()?;
+        let _ = stream.shutdown(std::net::Shutdown::Both);
         return Ok(());
     }
 
@@ -1171,6 +1197,8 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
 
     let json = serde_json::to_string(&display_output).unwrap();
     stream.write_all(json.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
     Ok(())
 }
 
@@ -1208,6 +1236,8 @@ fn handle_capture_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
 
     let json = serde_json::to_string(&display_output).unwrap();
     stream.write_all(json.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
     Ok(())
 }
 
@@ -1220,6 +1250,8 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
             let output = DisplayOutput::from_error("", "Missing command parameter");
             let json = serde_json::to_string(&output).unwrap();
             stream.write_all(json.as_bytes())?;
+            stream.flush()?;
+            let _ = stream.shutdown(std::net::Shutdown::Both);
             return Ok(());
         }
     };
@@ -1227,6 +1259,23 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
     let session = data.get("session")
         .and_then(|v| v.as_str())
         .unwrap_or("archy_session");
+
+    // CRITICAL: Ensure tmux session exists before sending commands
+    // This prevents "no server running" errors that cause broken pipes
+    if !tmux::has_session(session) {
+        eprintln!("⚠️ Session {} doesn't exist, creating...", session);
+        if let Err(e) = tmux::new_session(session) {
+            eprintln!("❌ Failed to create session: {}", e);
+            let output = DisplayOutput::from_error(command, &format!("Failed to create tmux session: {}", e));
+            let json = serde_json::to_string(&output).unwrap();
+            let _ = stream.write_all(json.as_bytes());
+            let _ = stream.flush();
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            return Ok(());
+        }
+        // Brief wait for session to initialize
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 
     // Execute command in tmux
     let exec_result = Command::new("tmux")
@@ -1237,6 +1286,8 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
         let output = DisplayOutput::from_error(command, &e.to_string());
         let json = serde_json::to_string(&output).unwrap();
         stream.write_all(json.as_bytes())?;
+        stream.flush()?;
+        let _ = stream.shutdown(std::net::Shutdown::Both);
         return Ok(());
     }
 
@@ -1263,6 +1314,8 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
 
     let json = serde_json::to_string(&display_output).unwrap();
     stream.write_all(json.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
     Ok(())
 }
 

@@ -28,47 +28,70 @@ class RustExecutor:
         Returns:
             Dictionary with response data (success, output, error, exists)
         """
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(10.0)  # 10-second timeout for connection and receive
-            client.connect(self.socket_path)
-            
-            message = json.dumps({"action": action, "data": data})
-            client.sendall(message.encode())
-            
-            # Receive response in chunks to handle large outputs
-            response_data = b''
-            max_response_size = 10 * 1024 * 1024  # 10MB limit
-            while len(response_data) < max_response_size:
-                try:
-                    chunk = client.recv(8192)
-                    if not chunk:
-                        break
-                    response_data += chunk
-                except socket.timeout:
-                    break  # Stop receiving if timeout is reached
+        max_retries = 2  # Retry up to 2 times on connection reset
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 
-            client.close()
+                # Dynamic timeout based on action type
+                # For actions that wait for command completion, use max_wait + buffer
+                if action in ['execute_and_wait', 'execute_analyzed', 'wait_for_prompt']:
+                    max_wait = data.get('max_wait', 300)  # Default 5 minutes
+                    # Socket timeout = command max_wait + 30 second buffer for processing
+                    socket_timeout = max_wait + 30.0
+                else:
+                    # Quick actions get 10 second timeout
+                    socket_timeout = 10.0
 
-            if not response_data:
-                return {"success": False, "error": "No response from executor (timeout or empty response)"}
+                client.settimeout(socket_timeout)
+                client.connect(self.socket_path)
+                
+                message = json.dumps({"action": action, "data": data})
+                client.sendall(message.encode())
+                
+                # Receive response in chunks to handle large outputs
+                response_data = b''
+                max_response_size = 10 * 1024 * 1024  # 10MB limit
+                while len(response_data) < max_response_size:
+                    try:
+                        chunk = client.recv(8192)
+                        if not chunk:
+                            break
+                        response_data += chunk
+                    except socket.timeout:
+                        break  # Stop receiving if timeout is reached
 
-            response = response_data.decode('utf-8', errors='replace')
-            return json.loads(response)
-        except FileNotFoundError:
-            return {
-                "success": False,
-                "error": "Rust executor daemon not running. Please start it with: ./start_daemon.sh"
-            }
-        except ConnectionRefusedError:
-            return {
-                "success": False,
-                "error": "Rust executor daemon not running (stale socket). Please start it with: ./start_daemon.sh"
-            }
-        except socket.timeout:
-            return {"success": False, "error": "Socket connection timeout"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+                client.close()
+
+                if not response_data:
+                    return {"success": False, "error": "No response from executor (timeout or empty response)"}
+
+                response = response_data.decode('utf-8', errors='replace')
+                return json.loads(response)
+            except FileNotFoundError:
+                return {
+                    "success": False,
+                    "error": "Rust executor daemon not running. Please start it with: ./start_daemon.sh"
+                }
+            except ConnectionRefusedError:
+                return {
+                    "success": False,
+                    "error": "Rust executor daemon not running (stale socket). Please start it with: ./start_daemon.sh"
+                }
+            except ConnectionResetError as e:
+                # Connection reset - try again (might be a race condition)
+                retry_count += 1
+                if retry_count > max_retries:
+                    return {"success": False, "error": f"Connection reset by daemon (tried {max_retries} times): {e}"}
+                import time
+                time.sleep(0.1 * retry_count)  # Brief backoff before retry
+                continue
+            except socket.timeout:
+                return {"success": False, "error": "Socket connection timeout"}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
     
     def execute_in_tmux(self, command: str, session: str = "archy_session") -> Dict[str, Any]:
         """Execute a command in the tmux session."""

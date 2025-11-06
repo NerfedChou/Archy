@@ -1,4 +1,19 @@
 #!/bin/bash
+# Check the status of the Archy Executor Daemon
+
+if pgrep -f "archy-executor" > /dev/null; then
+    echo "✅ Archy executor daemon is RUNNING"
+    if [ -S /tmp/archy.sock ]; then
+        echo "✅ Socket is available at /tmp/archy.sock"
+    else
+        echo "⚠️  Socket not found (may be unhealthy)"
+    fi
+    exit 0
+else
+    echo "❌ Archy executor daemon is NOT RUNNING"
+    exit 1
+fi
+#!/bin/bash
 # Start the Archy Rust Executor Daemon
 
 # Check if daemon is already running
@@ -15,7 +30,8 @@ fi
 
 # Navigate to Archy directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$(dirname "$SCRIPT_DIR")"  # Go up to scripts, then to root
+cd ..
 
 # Check if binary exists
 if [ ! -f "target/release/archy-executor" ]; then
@@ -35,7 +51,6 @@ sleep 1
 
 if [ -S /tmp/archy.sock ]; then
     echo "✅ Archy executor daemon is running!"
-    echo "🐍 You can now use: ./scripts/archy"
 else
     echo "❌ Failed to start daemon"
     exit 1
