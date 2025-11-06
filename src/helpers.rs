@@ -255,7 +255,7 @@ pub mod environment {
     pub fn get_display() -> String {
         // First, check if DISPLAY is already set in environment
         if let Ok(display) = std::env::var("DISPLAY") {
-            if !display.is_empty() && display != ":0" && display != ":1" {
+            if !display.is_empty() {
                 return display;
             }
         }
@@ -314,10 +314,11 @@ pub mod environment {
             }
         }
 
-        // Fallback
-        format!("unix:path=/run/user/{}/bus", unsafe {
-            libc::getuid()
-        })
+        // Fallback - try to get UID from environment
+        let uid = std::env::var("UID")
+            .or_else(|_| std::env::var("EUID"))
+            .unwrap_or_else(|_| "1000".to_string()); // Common default UID
+        format!("unix:path=/run/user/{}/bus", uid)
     }
 }
 

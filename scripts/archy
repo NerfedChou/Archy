@@ -98,15 +98,35 @@ check_daemon_running() {
     return 1
 }
 
+# Detect if running under sudo
+SUDO_USER="${SUDO_USER:-}"
+RUNNING_AS_ROOT=$([[ $EUID -eq 0 ]] && echo "true" || echo "false")
+
 # If daemon isn't running, try starting the service
 if ! check_daemon_running; then
     print_warning "Daemon not responding. Starting systemd service..."
-    systemctl --user start archy-executor.service 2>/dev/null
-    sleep 1
+
+    # If running as root via sudo, we need to start the user's service session
+    if [[ "$RUNNING_AS_ROOT" == "true" && -n "$SUDO_USER" ]]; then
+        print_info "Running as root (via sudo), starting service for user: $SUDO_USER"
+        # Run systemctl as the original user
+        sudo -u "$SUDO_USER" systemctl --user start archy-executor.service 2>/dev/null
+        sleep 1
+    else
+        # Normal user execution
+        systemctl --user start archy-executor.service 2>/dev/null
+        sleep 1
+    fi
+
     if ! check_daemon_running; then
         print_error "Failed to start archy-executor service"
-        print_info "Try: systemctl --user start archy-executor.service"
-        print_info "Or check status: systemctl --user status archy-executor.service"
+        if [[ "$RUNNING_AS_ROOT" == "true" && -n "$SUDO_USER" ]]; then
+            print_info "Try: sudo -u $SUDO_USER systemctl --user start archy-executor.service"
+            print_info "Or check status: sudo -u $SUDO_USER systemctl --user status archy-executor.service"
+        else
+            print_info "Try: systemctl --user start archy-executor.service"
+            print_info "Or check status: systemctl --user status archy-executor.service"
+        fi
         exit 1
     fi
 fi
