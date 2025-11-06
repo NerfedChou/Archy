@@ -1,58 +1,59 @@
 #!/bin/bash
 # Check the status of the Archy Executor Daemon
 
+# Color codes
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}[*] Checking Archy Executor Daemon Status...${NC}\n"
+
+# Check systemd service first
+echo -e "${BLUE}Systemd Service Status:${NC}"
+if systemctl --user is-active --quiet archy-executor.service 2>/dev/null; then
+    echo -e "${GREEN}✅ Service is enabled and running${NC}"
+    systemctl --user status archy-executor.service --no-pager 2>/dev/null | grep -E "(Active|Memory|Tasks|CPU)" | sed 's/^/   /'
+else
+    echo -e "${YELLOW}⚠️  Service is not running via systemd${NC}"
+fi
+
+echo ""
+echo -e "${BLUE}Process Status:${NC}"
+
+# Check if daemon process is running
 if pgrep -f "archy-executor" > /dev/null; then
-    echo "✅ Archy executor daemon is RUNNING"
-    if [ -S /tmp/archy.sock ]; then
-        echo "✅ Socket is available at /tmp/archy.sock"
-    else
-        echo "⚠️  Socket not found (may be unhealthy)"
-    fi
-    exit 0
+    PID=$(pgrep -f "archy-executor")
+    echo -e "${GREEN}✅ Daemon process is RUNNING${NC}"
+    echo -e "   PID: $PID"
+
+    # Show process info
+    ps -p "$PID" -o %cpu=,%mem=,etime= 2>/dev/null | {
+        read cpu mem time
+        echo -e "   CPU: $cpu%"
+        echo -e "   Memory: $mem%"
+        echo -e "   Uptime: $time"
+    }
 else
-    echo "❌ Archy executor daemon is NOT RUNNING"
-    exit 1
+    echo -e "${RED}❌ Daemon process is NOT RUNNING${NC}"
 fi
-#!/bin/bash
-# Start the Archy Rust Executor Daemon
 
-# Check if daemon is already running
+echo ""
+echo -e "${BLUE}Socket Status:${NC}"
+
+# Check socket
 if [ -S /tmp/archy.sock ]; then
-    # Check if the process is actually running
-    if pgrep -f "archy-executor" > /dev/null; then
-        echo "⚠️  Archy executor daemon is already running."
-        exit 1
-    else
-        echo "🧹 Cleaning up stale socket..."
-        rm -f /tmp/archy.sock
-    fi
-fi
-
-# Navigate to Archy directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$(dirname "$SCRIPT_DIR")"  # Go up to scripts, then to root
-cd ..
-
-# Check if binary exists
-if [ ! -f "target/release/archy-executor" ]; then
-    echo "🔨 Building Rust executor..."
-    cargo build --release
-    if [ $? -ne 0 ]; then
-        echo "❌ Failed to build Rust executor"
-        exit 1
-    fi
-fi
-
-echo "🚀 Starting Archy Executor Daemon..."
-./target/release/archy-executor &
-
-# Wait a moment for the socket to be created
-sleep 1
-
-if [ -S /tmp/archy.sock ]; then
-    echo "✅ Archy executor daemon is running!"
+    echo -e "${GREEN}✅ Socket is available at /tmp/archy.sock${NC}"
 else
-    echo "❌ Failed to start daemon"
-    exit 1
+    echo -e "${RED}❌ Socket not found at /tmp/archy.sock${NC}"
 fi
+
+echo ""
+echo -e "${BLUE}Useful Commands:${NC}"
+echo -e "  ${YELLOW}Start:${NC}    systemctl --user start archy-executor.service"
+echo -e "  ${YELLOW}Stop:${NC}     systemctl --user stop archy-executor.service"
+echo -e "  ${YELLOW}Restart:${NC}  systemctl --user restart archy-executor.service"
+echo -e "  ${YELLOW}Logs:${NC}     journalctl --user -u archy-executor.service -f"
+echo ""
 

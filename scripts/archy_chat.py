@@ -723,17 +723,8 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             commands_to_run = self.deduplicate_commands(commands_to_run)
 
             if commands_to_run:
-                # 🎯 BATCH EXECUTION: Ensure terminal is ready for multiple commands
+                # 🎯 BATCH EXECUTION: Separate GUI apps from CLI commands first
                 session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-
-                # Check if session exists, create if needed
-                if not self.rust_executor.check_session():
-                    yield f"\n\033[93m⚙️  Creating terminal session...\033[0m\n"
-                    self.rust_executor.open_terminal()
-                    import time
-                    time.sleep(0.5)  # Brief wait for session setup
-
-                # Separate GUI apps from CLI commands
                 gui_apps = []
                 cli_commands = []
 
@@ -767,7 +758,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         yield f"\n\033[91m❌ Invalid command syntax: {command}\033[0m\n"
                         continue
 
-                # Launch all GUI apps (non-blocking)
+                # Launch all GUI apps (non-blocking, no terminal needed)
                 for gui_cmd in gui_apps:
                     quick_check = self.rust_executor.execute_command_smart(gui_cmd, session)
                     if quick_check.get('success'):
@@ -777,15 +768,26 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
                 # Execute all CLI commands in sequence (blocking, with analysis)
                 if cli_commands:
+                    # NOW create terminal session if needed (only for CLI commands)
+                    if not self.rust_executor.check_session():
+                        yield f"\n\033[93m⚙️  Creating terminal session...\033[0m\n"
+                        self.rust_executor.open_terminal()
+                        import time
+                        time.sleep(0.5)  # Brief wait for session setup
+
                     if len(cli_commands) > 1:
                         yield f"\n\033[96m⚡ Executing {len(cli_commands)} commands in sequence...\033[0m\n"
+
+                    # Collect all results for batch analysis
+                    batch_results = []
+                    batch_structured = {}
+                    batch_findings = []
 
                     for idx, command in enumerate(cli_commands, 1):
                         if len(cli_commands) > 1:
                             yield f"\n\033[96m[{idx}/{len(cli_commands)}] {command}\033[0m\n"
 
-                        # Use Rust's SMART execute_and_wait for proper command completion detection!
-                        # This automatically waits for the command to finish using prompt detection
+                        # Execute command and wait for completion
                         result = self.rust_executor.execute_and_wait(
                             command=command,
                             session=session,
@@ -797,55 +799,126 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                             yield f"\n\033[91m❌ {result.get('error', 'Execution failed')}\033[0m\n"
                             continue
 
-                        # Display the output from Rust's execute_and_wait (HIDE internal JSON, only show formatted display)
-                        display = result.get('display', '')
-                        if display:
-                            yield f"\n{display}\n"
+                        # Collect result WITHOUT displaying raw output yet
+                        batch_results.append({
+                            'command': command,
+                            'result': result,
+                            'structured': result.get('structured', {}),
+                            'findings': result.get('findings', []),
+                            'summary': result.get('summary', '')
+                        })
 
-                        # Store STRUCTURED data in terminal history
-                        with self._history_lock:
-                            self.terminal_history.append({
-                                "command": command,
-                                "structured": result.get('structured', {}),
-                                "findings": result.get('findings', []),
-                                "summary": result.get('summary', '')
-                            })
+                        # Aggregate findings
+                        batch_findings.extend(result.get('findings', []))
 
-                        # CRITICAL: Add the command output to conversation history so AI remembers REAL results
-                        output_context = f"\n[Command '{command}' completed]\n"
-                        output_context += f"Status: {result.get('status', 'unknown')}\n"
-                        output_context += f"Summary: {result.get('summary', 'No summary')}\n"
+                        # Merge structured data
+                        cmd_structured = result.get('structured', {})
+                        for key, value in cmd_structured.items():
+                            if key not in batch_structured:
+                                batch_structured[key] = value
+                            elif isinstance(value, list):
+                                if not isinstance(batch_structured[key], list):
+                                    batch_structured[key] = [batch_structured[key]]
+                                batch_structured[key].extend(value)
 
-                        # Add findings if any
-                        findings = result.get('findings', [])
-                        if findings:
-                            output_context += "Key findings:\n"
-                            for finding in findings[:5]:  # Max 5 findings
+                        # Brief status indicator (no raw output)
+                        status = result.get('status', 'unknown')
+                        if status == 'success':
+                            yield f"  ✓ Completed\n"
+                        elif status == 'warning':
+                            yield f"  ⚠️ Completed with warnings\n"
+                        else:
+                            yield f"  ✗ {status}\n"
+
+                    # NOW display aggregated results
+                    yield f"\n\033[92m{'='*60}\033[0m\n"
+                    yield f"\033[92m📊 BATCH EXECUTION SUMMARY ({len(batch_results)} commands)\033[0m\n"
+                    yield f"\033[92m{'='*60}\033[0m\n\n"
+
+                    # Show compact summaries for each command
+                    for idx, batch_item in enumerate(batch_results, 1):
+                        cmd = batch_item['command']
+                        summary = batch_item['summary']
+
+                        yield f"\033[96m[{idx}] {cmd}\033[0m\n"
+                        yield f"  → {summary}\n\n"
+
+                    # Show aggregated findings (deduplicated)
+                    unique_findings = {}
+                    if batch_findings:
+                        for finding in batch_findings:
+                            msg = finding.get('message', '') if isinstance(finding, dict) else str(finding)
+                            category = finding.get('category', 'Info') if isinstance(finding, dict) else 'Info'
+                            key = f"{category}:{msg}"
+                            if key not in unique_findings:
+                                unique_findings[key] = finding
+
+                        if unique_findings:
+                            yield f"\033[93m🔍 Key Findings Across All Commands:\033[0m\n"
+                            for finding in unique_findings.values():
                                 if isinstance(finding, dict):
-                                    output_context += f"  - {finding.get('message', finding.get('category', 'Info'))}\n"
+                                    category = finding.get('category', 'Info')
+                                    message = finding.get('message', '')
                                 else:
-                                    output_context += f"  - {str(finding)}\n"
-
-                        # Add to conversation so AI remembers the REAL output
-                        self.add_to_conversation("user", output_context)
-
-                        # ✨ Trigger AI analysis after command completes (only for last command in batch)
-                        if idx == len(cli_commands):
-                            yield "\n\033[92m📊 AI Analysis:\033[0m\n\n"
-
-                            # Build analysis request
-                            analysis_request = "Based on the command output(s) above, provide a brief analysis:\n"
-                            analysis_request += "1. **💡 Interpretation:** What does this mean? (1-2 sentences)\n"
-                            analysis_request += "2. **🎯 Next Steps:** What should we do next? (if applicable)\n"
-                            analysis_request += "3. **🔒 Security Notes:** Any security concerns? (only if relevant)\n"
-
-                            # Add to conversation
-                            self.add_to_conversation("user", analysis_request)
-
-                            # Generate AI analysis
-                            for chunk in self._generate_analysis_response():
-                                yield chunk
+                                    category = 'Info'
+                                    message = str(finding)
+                                icon = {'Success': '✓', 'Warning': '⚠️', 'Error': '✗', 'Info': 'ℹ️'}.get(category, '•')
+                                yield f"  {icon} {category}: {message}\n"
                             yield "\n"
+
+                    # Store aggregated data in terminal history
+                    with self._history_lock:
+                        self.terminal_history.append({
+                            "command": f"BATCH: {', '.join([r['command'] for r in batch_results])}",
+                            "structured": batch_structured,
+                            "findings": list(unique_findings.values()) if batch_findings else [],
+                            "summary": f"Executed {len(batch_results)} commands successfully",
+                            "batch_results": batch_results  # Keep individual results too
+                        })
+
+                    # Build smart context for AI (aggregated view)
+                    batch_context = f"\n[Batch Execution Completed: {len(batch_results)} commands]\n\n"
+
+                    for idx, batch_item in enumerate(batch_results, 1):
+                        batch_context += f"Command {idx}: {batch_item['command']}\n"
+                        batch_context += f"  Status: {batch_item['result'].get('status', 'unknown')}\n"
+                        batch_context += f"  Summary: {batch_item['summary']}\n"
+
+                        # Add key findings for this command
+                        cmd_findings = batch_item['findings']
+                        if cmd_findings and len(cmd_findings) <= 3:
+                            batch_context += "  Key points:\n"
+                            for finding in cmd_findings[:3]:
+                                if isinstance(finding, dict):
+                                    batch_context += f"    - {finding.get('message', str(finding))}\n"
+                                else:
+                                    batch_context += f"    - {str(finding)}\n"
+                        batch_context += "\n"
+
+                    # Add aggregated findings summary
+                    if batch_findings:
+                        batch_context += f"Overall findings: {len(unique_findings)} unique insights across all commands\n"
+
+                    # Add to conversation so AI sees the FULL picture
+                    self.add_to_conversation("user", batch_context)
+
+                    # Generate comprehensive analysis
+                    yield f"\033[92m{'='*60}\033[0m\n"
+                    yield "\033[92m🤖 AI Analysis:\033[0m\n\n"
+
+                    analysis_request = f"Based on the batch execution of {len(batch_results)} commands above:\n\n"
+                    analysis_request += "1. **💡 Overall Interpretation:** What's the big picture? What did we learn?\n"
+                    analysis_request += "2. **🎯 Next Steps:** What should we do based on these results?\n"
+                    analysis_request += "3. **🔗 Connections:** How do these results relate to each other?\n"
+                    if batch_findings:
+                        analysis_request += "4. **🔒 Security Notes:** Any concerns from the findings?\n"
+                    analysis_request += "\nProvide a cohesive analysis, not separate answers for each command!"
+
+                    self.add_to_conversation("user", analysis_request)
+
+                    for chunk in self._generate_analysis_response():
+                        yield chunk
+                    yield "\n"
 
 
 
