@@ -40,9 +40,22 @@ fn main() -> std::io::Result<()> {
     println!("   • Buffer size: {}", config.max_buffer_size);
     println!("✅ Ready to handle system operations...\n");
 
+    // Simple rate limiting: track last connection time
+    use std::time::{Instant, Duration};
+    let mut last_connection = Instant::now();
+    let min_interval = Duration::from_millis(10); // Max 100 connections/sec
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                // Basic rate limiting
+                let now = Instant::now();
+                if now.duration_since(last_connection) < min_interval {
+                    eprintln!("⚠️ Rate limit: connection too fast, ignoring");
+                    continue;
+                }
+                last_connection = now;
+
                 if let Err(e) = handle_client(stream, &config) {
                     eprintln!("❌ Client handler error: {}", e);
                 }
@@ -55,9 +68,32 @@ fn main() -> std::io::Result<()> {
 }
 
 fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()> {
+    // Set read timeout to prevent hanging connections
+    use std::time::Duration;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+
     let mut buffer = vec![0; config.max_buffer_size];
 
-    let size = stream.read(&mut buffer)?;
+    let size = match stream.read(&mut buffer) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("❌ Read error: {}", e);
+            return Ok(());
+        }
+    };
+
+    // Validate buffer size
+    if size == 0 {
+        eprintln!("❌ Empty request received");
+        return Ok(());
+    }
+
+    if size >= config.max_buffer_size {
+        send_error(&mut stream, "Request too large")?;
+        return Ok(());
+    }
+
     let request: Request = match serde_json::from_slice(&buffer[..size]) {
         Ok(req) => req,
         Err(e) => {
@@ -101,6 +137,38 @@ fn execute_command(data: &Value, config: &Config) -> Response {
         Ok(cmd) => cmd,
         Err(e) => return response::error(e),
     };
+
+    // Validate and sanitize command
+    if command.trim().is_empty() {
+        return response::error("Command cannot be empty".to_string());
+    }
+
+    // Check for null bytes (common injection vector)
+    if command.contains('\0') {
+        return response::error("Invalid command: contains null byte".to_string());
+    }
+
+    // Limit command length to prevent buffer overflow
+    if command.len() > 8192 {
+        return response::error("Command too long (max 8192 characters)".to_string());
+    }
+
+    // Blacklist extremely dangerous patterns
+    let dangerous_patterns = [
+        "rm -rf /",
+        "rm -rf /*",
+        "> /dev/sda",
+        "dd if=/dev/zero of=/dev/sda",
+        "mkfs.",
+        ":(){ :|:& };:",  // Fork bomb
+    ];
+
+    let command_lower = command.to_lowercase();
+    for pattern in &dangerous_patterns {
+        if command_lower.contains(pattern) {
+            return response::error(format!("Blocked dangerous command pattern: {}", pattern));
+        }
+    }
 
     let session = config.get_session(data);
 
@@ -402,6 +470,26 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
         },
     };
 
+    // Validate app_name to prevent directory traversal
+    if app_name.contains('/') || app_name.contains("..") || app_name.contains('\0') {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid app_name: contains illegal characters".to_string()),
+            exists: None,
+        };
+    }
+
+    // Limit length
+    if app_name.len() > 255 {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid app_name: too long".to_string()),
+            exists: None,
+        };
+    }
+
     let desktop_dirs = vec![
         format!("{}/.local/share/applications", std::env::var("HOME").unwrap_or_default()),
         "/usr/local/share/applications".to_string(),
@@ -581,9 +669,15 @@ fn wait_for_command_completion(data: &serde_json::Value) -> Response {
         .and_then(|v| v.as_u64())
         .unwrap_or(600) as u64; // Default 10 minutes
 
+    // Cap max_wait to prevent abuse (max 1 hour)
+    let max_wait_seconds = max_wait_seconds.min(3600);
+
     let check_interval_ms = data.get("interval_ms")
         .and_then(|v| v.as_u64())
         .unwrap_or(500) as u64; // Default 500ms
+
+    // Cap check interval to prevent rapid polling (min 100ms)
+    let check_interval_ms = check_interval_ms.max(100);
 
     let command = data.get("command")
         .and_then(|v| v.as_str())
@@ -678,6 +772,26 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
             exists: None,
         },
     };
+
+    // Validate desktop_entry to prevent injection
+    if desktop_entry.contains('/') || desktop_entry.contains("..") || desktop_entry.contains('\0') {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid desktop_entry: contains illegal characters".to_string()),
+            exists: None,
+        };
+    }
+
+    // Limit length
+    if desktop_entry.len() > 255 {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid desktop_entry: too long".to_string()),
+            exists: None,
+        };
+    }
 
     // Try gtk-launch first
     let gtk_result = Command::new("gtk-launch")
@@ -791,9 +905,49 @@ fn launch_fallback_terminal(data: &serde_json::Value) -> Response {
         },
     };
 
+    // Validate command
+    if command.trim().is_empty() {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Command cannot be empty".to_string()),
+            exists: None,
+        };
+    }
+
+    if command.contains('\0') {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid command: contains null byte".to_string()),
+            exists: None,
+        };
+    }
+
+    if command.len() > 8192 {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Command too long".to_string()),
+            exists: None,
+        };
+    }
+
     let terminal = data.get("terminal")
         .and_then(|v| v.as_str())
         .unwrap_or("foot");
+
+    // Validate terminal name (only allow known terminals)
+    let allowed_terminals = ["foot", "kitty", "konsole", "gnome-terminal",
+                            "xfce4-terminal", "alacritty", "terminator"];
+    if !allowed_terminals.contains(&terminal) {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid terminal specified".to_string()),
+            exists: None,
+        };
+    }
 
     let terminal_cmd = format!("{}; echo ''; echo 'Press Enter to close...'; read", command);
 
@@ -833,6 +987,36 @@ fn execute_command_smart(data: &serde_json::Value) -> Response {
             exists: None,
         },
     };
+
+    // Validate command
+    if command.trim().is_empty() {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Command cannot be empty".to_string()),
+            exists: None,
+        };
+    }
+
+    // Check for null bytes
+    if command.contains('\0') {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Invalid command: contains null byte".to_string()),
+            exists: None,
+        };
+    }
+
+    // Limit command length
+    if command.len() > 8192 {
+        return Response {
+            success: false,
+            output: None,
+            error: Some("Command too long (max 8192 characters)".to_string()),
+            exists: None,
+        };
+    }
 
     let session = data.get("session")
         .and_then(|v| v.as_str())
