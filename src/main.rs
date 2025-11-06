@@ -508,7 +508,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
     }
 
     let app_name_lower = app_name.to_lowercase();
-    eprintln!("🔍 Searching for desktop entry: {}", app_name);
 
     let desktop_dirs = vec![
         format!("{}/.local/share/applications", std::env::var("HOME").unwrap_or_default()),
@@ -521,7 +520,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
     ];
 
     // First pass: try exact filename match
-    eprintln!("  [Pass 1] Checking exact filename match...");
     for dir in &desktop_dirs {
         let path = PathBuf::from(&dir);
         if !path.exists() || !path.is_dir() {
@@ -530,7 +528,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
 
         let desktop_file = format!("{}/{}.desktop", dir, app_name);
         if fs::metadata(&desktop_file).is_ok() {
-            eprintln!("  ✓ Found exact match: {}", desktop_file);
             return Response {
                 success: true,
                 output: Some(app_name.to_string()),
@@ -541,7 +538,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
     }
 
     // Second pass: search by Name field or Exec field
-    eprintln!("  [Pass 2] Searching by Name and Exec fields...");
     for dir in &desktop_dirs {
         let path = PathBuf::from(&dir);
         if !path.exists() || !path.is_dir() {
@@ -561,7 +557,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                                 if line.starts_with("Name=") && line.len() > 5 {
                                     let name_value = &line[5..];
                                     if name_value.eq_ignore_ascii_case(&app_name_lower) {
-                                        eprintln!("  ✓ Found by Name field: {}", filepath.display());
                                         found = true;
                                         break;
                                     }
@@ -571,7 +566,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                                 if line.starts_with("GenericName=") && line.len() > 12 {
                                     let generic_value = &line[12..];
                                     if generic_value.eq_ignore_ascii_case(&app_name_lower) {
-                                        eprintln!("  ✓ Found by GenericName field: {}", filepath.display());
                                         found = true;
                                         break;
                                     }
@@ -590,7 +584,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                                         };
 
                                         if binary_name.eq_ignore_ascii_case(&app_name_lower) {
-                                            eprintln!("  ✓ Found by Exec field: {}", filepath.display());
                                             found = true;
                                             break;
                                         }
@@ -619,7 +612,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
     // Third pass: fuzzy match (partial match) - BUT ONLY for longer app names
     // Don't fuzzy match single-letter or 2-letter commands (ls, cd, ps, rm, etc.)
     if app_name_lower.len() >= 4 {
-        eprintln!("  [Pass 3] Attempting fuzzy match...");
         for dir in &desktop_dirs {
             let path = PathBuf::from(&dir);
             if !path.exists() || !path.is_dir() {
@@ -639,7 +631,6 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                                         let min_match_len = (app_name_lower.len() as f32 * 0.8) as usize;
 
                                         if name_value.contains(app_name_lower.as_str()) && name_value.len() >= min_match_len {
-                                            eprintln!("  ✓ Found by fuzzy match: {}", filepath.display());
                                             if let Some(stem) = filepath.file_stem() {
                                                 return Response {
                                                     success: true,
@@ -657,11 +648,8 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                 }
             }
         }
-    } else {
-        eprintln!("  [Pass 3] Skipping fuzzy match for short app name: '{}'", app_name_lower);
     }
 
-    eprintln!("❌ Desktop entry not found: {}", app_name);
     Response {
         success: true,
         output: None,
@@ -908,19 +896,13 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         };
     }
 
-    eprintln!("🔍 Attempting to launch desktop app: {}", desktop_entry);
-
     // Get current environment variables (DISPLAY, DBUS, etc.) using helpers
     use helpers::environment;
     let display = environment::get_display();
     let xauthority = environment::get_xauthority();
     let dbus_addr = environment::get_dbus_address();
 
-    eprintln!("  Environment: DISPLAY={}, XAUTHORITY={}", display, xauthority);
-    eprintln!("  DBUS_SESSION_BUS_ADDRESS={}", dbus_addr);
-
     // Try gtk-launch first (most reliable)
-    eprintln!("  [1] Trying gtk-launch...");
     let gtk_result = Command::new("gtk-launch")
         .env("DISPLAY", &display)
         .env("XAUTHORITY", &xauthority)
@@ -935,7 +917,7 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    eprintln!("  ❌ gtk-launch exited with status: {}", status);
+                    // gtk-launch failed, continue to fallback
                 } else {
                     return Response {
                         success: true,
@@ -947,7 +929,6 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
             }
             Ok(None) => {
                 // Still running - success! Don't kill it, just detach
-                eprintln!("  ✓ gtk-launch process still running - application launched successfully");
                 return Response {
                     success: true,
                     output: Some(format!("✓ GUI app '{}' launched via gtk-launch", desktop_entry)),
@@ -955,14 +936,13 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                     exists: None,
                 };
             }
-            Err(e) => {
-                eprintln!("  ⚠️ Error checking gtk-launch status: {}", e);
+            Err(_e) => {
+                // Error checking status, continue to fallback
             }
         }
     }
 
     // Fallback: Try to find and execute the desktop entry directly
-    eprintln!("  [2] Trying to find desktop file...");
 
     let desktop_dirs = vec![
         format!("{}/.local/share/applications", std::env::var("HOME").unwrap_or_default()),
@@ -972,10 +952,8 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
 
     for dir in desktop_dirs {
         let desktop_file = format!("{}/{}.desktop", dir, desktop_entry);
-        eprintln!("    Checking: {}", desktop_file);
 
         if let Ok(content) = fs::read_to_string(&desktop_file) {
-            eprintln!("    ✓ Found desktop file");
 
             // Parse the desktop file more carefully
             for line in content.lines() {
@@ -1013,12 +991,9 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                         {
                             use std::os::unix::fs::PermissionsExt;
                             if metadata.permissions().mode() & 0o111 == 0 {
-                                eprintln!("    ⚠️ Not executable: {}", exec_path);
                                 continue;
                             }
                         }
-
-                        eprintln!("    Launching: {} {:?}", exec_path, parts[1..].to_vec());
 
                         // Get environment variables for GUI support
                         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
@@ -1035,7 +1010,6 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                         match result {
                             Ok(_child) => {
                                 // Detach from parent - don't wait for it, don't kill it!
-                                eprintln!("  ✓ Application launched successfully from desktop file");
                                 return Response {
                                     success: true,
                                     output: Some(format!("✓ GUI app '{}' launched (from desktop file)", desktop_entry)),
@@ -1043,12 +1017,10 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                                     exists: None,
                                 };
                             }
-                            Err(e) => {
-                                eprintln!("    ⚠️ Failed to spawn: {}", e);
+                            Err(_e) => {
+                                // Failed to spawn, continue
                             }
                         }
-                    } else {
-                        eprintln!("    ⚠️ Executable not found or not readable: {}", exec_path);
                     }
                 }
             }
@@ -1056,7 +1028,6 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
     }
 
     // Last resort: Try to run it directly as a command if it's in PATH
-    eprintln!("  [3] Trying direct execution in PATH...");
     let which_result = Command::new("which")
         .arg(desktop_entry)
         .output();
@@ -1079,7 +1050,6 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
                     .spawn();
 
                 if let Ok(_child) = spawn_result {
-                    eprintln!("  ✓ Application launched directly from PATH");
                     return Response {
                         success: true,
                         output: Some(format!("✓ GUI app '{}' launched directly", desktop_entry)),
@@ -1091,7 +1061,6 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         }
     }
 
-    eprintln!("❌ All launch methods failed for: {}", desktop_entry);
     Response {
         success: false,
         output: None,

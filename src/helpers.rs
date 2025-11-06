@@ -271,11 +271,10 @@ pub mod environment {
 
         // Try Wayland
         if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            eprintln!("⚠️  Using Wayland instead of X11");
+            // Wayland detected, no action needed
         }
 
         // Fallback
-        eprintln!("⚠️  Could not detect active display, using default :0");
         ":0".to_string()
     }
 

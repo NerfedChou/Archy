@@ -458,9 +458,22 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             return cache[command]
 
         try:
-            prompt = f"""Explain this command in 1-2 sentences. Be concise. Command: {command}
+            # Detect if command has flags
+            has_flags = '-' in command and len(command.split()) > 1
+
+            if has_flags:
+                prompt = f"""Explain this command in 1-2 short sentences. If it has flags, briefly explain what each flag does (1 sentence per flag). Be concise.
+
+Command: {command}
 
 Just give the explanation, nothing else."""
+            else:
+                prompt = f"""Explain what this command does in 1 sentence. Be concise.
+
+Command: {command}
+
+Just give the explanation, nothing else."""
+
             headers = {
                 "Authorization": f"Bearer {self.gemini_api_key}",
                 "Content-Type": "application/json"
@@ -469,7 +482,7 @@ Just give the explanation, nothing else."""
                 "model": self.gemini_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.5,
-                "max_tokens": 80
+                "max_tokens": 100  # Slightly more tokens for flag explanations
             }
 
             response = requests.post(
@@ -862,8 +875,16 @@ Just give the explanation, nothing else."""
                     batch_findings = []
 
                     for idx, command in enumerate(cli_commands, 1):
+                        # Get AI explanation for the command
+                        explanation = self.get_command_explanation(command)
+
                         if len(cli_commands) > 1:
                             yield f"\n\033[96m[{idx}/{len(cli_commands)}] {command}\033[0m\n"
+                            yield f"\033[90m   ℹ️  {explanation}\033[0m\n"
+                        else:
+                            # Single command - show explanation before execution
+                            yield f"\n\033[96m➜ {command}\033[0m\n"
+                            yield f"\033[90m   {explanation}\033[0m\n\n"
 
                         # Execute command and wait for completion
                         result = self.rust_executor.execute_and_wait(
@@ -880,6 +901,7 @@ Just give the explanation, nothing else."""
                         # Collect result WITHOUT displaying raw output yet
                         batch_results.append({
                             'command': command,
+                            'explanation': explanation,  # Store explanation for later display
                             'result': result,
                             'structured': result.get('structured', {}),
                             'findings': result.get('findings', []),
@@ -909,30 +931,43 @@ Just give the explanation, nothing else."""
                             yield f"  ✗ {status}\n"
 
                     # NOW display aggregated results
-                    yield f"\n\033[92m{'='*60}\033[0m\n"
-                    yield f"\033[92m📊 BATCH EXECUTION SUMMARY ({len(batch_results)} commands)\033[0m\n"
-                    yield f"\033[92m{'='*60}\033[0m\n\n"
+                    # For single commands, show simpler output; for multiple commands, show batch summary
+                    if len(batch_results) == 1:
+                        # Single command - just show the summary without "BATCH" header
+                        cmd = batch_results[0]['command']
+                        summary = batch_results[0]['summary']
 
-                    # Show compact summaries for each command
-                    for idx, batch_item in enumerate(batch_results, 1):
-                        cmd = batch_item['command']
-                        summary = batch_item['summary']
+                        yield f"\n\033[96m➜ Command: {cmd}\033[0m\n\n"
+                        if summary and summary != "JSON data parsed successfully":
+                            yield f"\033[92m✓ Summary:\033[0m {summary}\n\n"
+                    else:
+                        # Multiple commands - show full batch summary
+                        yield f"\n\033[92m{'='*60}\033[0m\n"
+                        yield f"\033[92m📊 BATCH EXECUTION SUMMARY ({len(batch_results)} commands)\033[0m\n"
+                        yield f"\033[92m{'='*60}\033[0m\n\n"
 
-                        yield f"\033[96m[{idx}] {cmd}\033[0m\n"
-                        yield f"  → {summary}\n\n"
+                        # Show compact summaries for each command
+                        for idx, batch_item in enumerate(batch_results, 1):
+                            cmd = batch_item['command']
+                            summary = batch_item['summary']
 
-                    # Show aggregated findings (deduplicated)
+                            yield f"\033[96m[{idx}] {cmd}\033[0m\n"
+                            yield f"  → {summary}\n\n"
+
+                    # Show aggregated findings (deduplicated) - only if there are meaningful findings
                     unique_findings = {}
                     if batch_findings:
                         for finding in batch_findings:
                             msg = finding.get('message', '') if isinstance(finding, dict) else str(finding)
                             category = finding.get('category', 'Info') if isinstance(finding, dict) else 'Info'
-                            key = f"{category}:{msg}"
-                            if key not in unique_findings:
-                                unique_findings[key] = finding
+                            # Skip generic/useless findings
+                            if msg and msg not in ['JSON data detected and parsed', 'Format']:
+                                key = f"{category}:{msg}"
+                                if key not in unique_findings:
+                                    unique_findings[key] = finding
 
                         if unique_findings:
-                            yield f"\033[93m🔍 Key Findings Across All Commands:\033[0m\n"
+                            yield f"\033[93m📊 Key Findings:\033[0m\n"
                             for finding in unique_findings.values():
                                 if isinstance(finding, dict):
                                     category = finding.get('category', 'Info')
