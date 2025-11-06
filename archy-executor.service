@@ -1,0 +1,26 @@
+[Unit]
+Description=Archy Executor Daemon - AI System Assistant
+After=network-online.target
+Wants=network-online.target
+StartLimitInterval=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/home/chef/Archy/target/release/archy-executor
+Restart=on-failure
+RestartSec=5
+
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=archy-executor
+
+# Keep the service running
+KillMode=process
+
+[Install]
+WantedBy=default.target
+
+

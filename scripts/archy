@@ -80,40 +80,35 @@ For more info: https://github.com/NerfedChou/Archy
 EOF
 }
 
-# Check if Rust executor daemon is running, start it if not
-start_daemon() {
-    if [[ ! -f "$ARCHY_DIR/start_daemon.sh" ]]; then
-        print_error "start_daemon.sh not found in $ARCHY_DIR"
-        exit 1
-    fi
-
-    if [[ ! -f "$ARCHY_DIR/target/release/archy-executor" ]]; then
-        print_warning "Rust executor not built. Building now..."
-        (cd "$ARCHY_DIR" && cargo build --release)
-        if [[ $? -ne 0 ]]; then
-            print_error "Failed to build archy-executor"
-            exit 1
-        fi
-    fi
-
-    "$ARCHY_DIR/start_daemon.sh" > /dev/null 2>&1
-    if [[ $? -eq 0 ]]; then
-        print_success "Daemon started"
-    else
-        print_error "Failed to start daemon. Try running: cd $ARCHY_DIR && ./start_daemon.sh"
-        exit 1
-    fi
+# Cleanup function called on exit
+cleanup() {
+    :
 }
 
-if [[ ! -S /tmp/archy.sock ]]; then
-    print_info "Starting Archy executor daemon..."
-    start_daemon
-elif ! pgrep -f "archy-executor" > /dev/null; then
-    # Socket exists but daemon not running - stale socket
-    print_warning "Stale socket detected, cleaning up..."
-    rm -f /tmp/archy.sock
-    print_info "Starting Archy executor daemon..."
-    start_daemon
+# Set trap to call cleanup on exit
+trap cleanup EXIT INT TERM
+
+# Daemon is now managed by systemd service
+# Just verify it's available
+check_daemon_running() {
+    # Check if the socket exists and is listening
+    if [[ -S /tmp/archy.sock ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# If daemon isn't running, try starting the service
+if ! check_daemon_running; then
+    print_warning "Daemon not responding. Starting systemd service..."
+    systemctl --user start archy-executor.service 2>/dev/null
+    sleep 1
+    if ! check_daemon_running; then
+        print_error "Failed to start archy-executor service"
+        print_info "Try: systemctl --user start archy-executor.service"
+        print_info "Or check status: systemctl --user status archy-executor.service"
+        exit 1
+    fi
 fi
 
 # Check if archy_chat.py exists
