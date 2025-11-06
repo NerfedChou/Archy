@@ -450,6 +450,74 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             yield chunk
         yield "\n"
 
+    def get_command_explanation(self, command: str) -> str:
+        """Get quick AI explanation for a single command (cached for speed)."""
+        # Quick cache check
+        cache = getattr(self, '_explanation_cache', {})
+        if command in cache:
+            return cache[command]
+
+        try:
+            prompt = f"""Explain this command in 1-2 sentences. Be concise. Command: {command}
+
+Just give the explanation, nothing else."""
+            headers = {
+                "Authorization": f"Bearer {self.gemini_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.gemini_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5,
+                "max_tokens": 80
+            }
+
+            response = requests.post(
+                self.gemini_api_url,
+                json=payload,
+                headers=headers,
+                timeout=5
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                content = ""
+                if "choices" in result and len(result["choices"]) > 0:
+                    choice = result["choices"][0]
+                    # Support both streaming and non-streaming responses
+                    delta = choice.get("delta", {})
+                    content = delta.get("content", "") or ""
+                    if not content:
+                        message = choice.get("message", {})
+                        content = message.get("content", "") or ""
+
+                if content:
+                    if not hasattr(self, '_explanation_cache'):
+                        self._explanation_cache = {}
+                    self._explanation_cache[command] = content.strip()
+                    return content.strip()
+        except Exception as e:
+            pass  # Silently fail and use fallback
+
+        # Fallback short explanation
+        fallback = f"Executes: {command.split()[0] if command.strip() else command}"
+        if not hasattr(self, '_explanation_cache'):
+            self._explanation_cache = {}
+        self._explanation_cache[command] = fallback
+        return fallback
+
+    def prepare_batch_with_explanations(self, commands: list) -> list:
+        """Get AI explanations for each command BEFORE execution."""
+        commands_with_explanations = []
+
+        for cmd in commands:
+            explanation = self.get_command_explanation(cmd)
+            commands_with_explanations.append({
+                "command": cmd,
+                "explanation": explanation
+            })
+
+        return commands_with_explanations
 
     def _preprocess_user_input(self, user_input: str) -> str:
         """
@@ -607,11 +675,21 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
             # Stream and collect the response
             full_response = ""
+            display_response = ""
             for chunk in self._stream_and_collect_response(response):
                 full_response += chunk
-                yield chunk  # ← YIELD to the caller so they can display it!
+                # Strip [EXECUTE_COMMAND: ...] and other command tags from display
+                display_chunk = re.sub(r'\s*\[EXECUTE_COMMAND:\s*[^\]]+\]', '', chunk)
+                display_chunk = re.sub(r'\s*\[OPEN_TERMINAL\]', '', display_chunk)
+                display_chunk = re.sub(r'\s*\[REOPEN_TERMINAL\]', '', display_chunk)
+                display_chunk = re.sub(r'\s*\[CLOSE_TERMINAL\]', '', display_chunk)
+                display_chunk = re.sub(r'\s*\[CLOSE_SESSION\]', '', display_chunk)
+                display_chunk = re.sub(r'\s*\[CHECK_TERMINAL\]', '', display_chunk)
+                if display_chunk.strip():  # Only yield if there's something to display
+                    display_response += display_chunk
+                    yield display_chunk  # ← YIELD to the caller so they can display it!
 
-            # Add assistant response to history
+            # Add full response (with tags) to history for command processing
             self.add_to_conversation("assistant", full_response)
 
             # 🔍 Smart Detection: Check if AI is talking about actions without using tags
@@ -919,54 +997,49 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                     for chunk in self._generate_analysis_response():
                         yield chunk
                     yield "\n"
-
-
-
-
-        except requests.exceptions.RequestException as e:
-            yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
-            self.add_to_conversation("system", f"Error: API request failed: {e}")
         except Exception as e:
-            yield f"\033[91m❌ Archy Error: An unexpected error occurred: {e}\033[0m"
-            self.add_to_conversation("system", f"Error: An unexpected error occurred: {e}")
+            yield f"\033[91m❌ Unexpected error: {str(e)}\033[0m\n"
 
-    def _stream_and_collect_response(self, response: requests.Response) -> Generator[str, None, None]:
-        """Helper to stream response chunks from the Gemini API."""
+    def _stream_and_collect_response(self, response):
+        """Stream response chunks from API and yield them."""
         for line in response.iter_lines():
             if line:
-                line = line.decode('utf-8').strip()
-                if line.startswith('data: '):
-                    line = line[6:].strip()
-                if line == "[DONE]":
-                    continue
-                if line:
-                    try:
-                        data = json.loads(line)
-                        if "choices" in data and len(data["choices"]) > 0:
-                            choice = data["choices"][0]
-                            # Try delta first (streaming format)
-                            delta = choice.get("delta", {})
-                            chunk = delta.get("content", "")
+                try:
+                    # Parse streaming response (typically SSE or newline-delimited JSON)
+                    line_str = line.decode('utf-8') if isinstance(line, bytes) else line
 
-                            # If no delta content, try message content (non-streaming format)
-                            if not chunk:
-                                message = choice.get("message", {})
-                                chunk = message.get("content", "")
-
-                            if chunk:
-                                yield chunk
-                    except json.JSONDecodeError:
-                        continue
+                    # Handle different response formats
+                    if line_str.startswith('data:'):
+                        # SSE format
+                        data_str = line_str[5:].strip()
+                        if data_str:
+                            data = json.loads(data_str)
+                            if 'choices' in data:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    yield content
+                    else:
+                        # Regular JSON
+                        try:
+                            data = json.loads(line_str)
+                            if 'choices' in data:
+                                delta = data['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    yield content
+                        except json.JSONDecodeError:
+                            # Not JSON, skip
+                            pass
+                except Exception as e:
+                    # Continue streaming on error
+                    pass
 
     def _generate_analysis_response(self) -> Generator[str, None, None]:
-        """Generate an automatic analysis response from the AI for the captured terminal output."""
-        # Build system context
-        context = f"\n\n[System Context: {self.get_system_info()}]\n[{self.get_available_tools()}]"
-        messages = [{"role": "system", "content": self.system_prompt + context}] + self.conversation_history
-
+        """Generate AI analysis response by calling the API."""
         payload = {
             "model": self.gemini_model,
-            "messages": messages,
+            "messages": self.conversation_history,
             "stream": True,
             "temperature": 0.7,
             "max_tokens": 2048
@@ -978,7 +1051,13 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
         }
 
         try:
-            response = requests.post(self.gemini_api_url, json=payload, headers=headers, stream=True, timeout=60)
+            response = requests.post(
+                self.gemini_api_url,
+                json=payload,
+                headers=headers,
+                stream=True,
+                timeout=60
+            )
 
             if response.status_code != 200:
                 error_detail = response.text
@@ -987,22 +1066,15 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                     error_detail = error_json.get("error", {}).get("message", error_detail)
                 except:
                     pass
-                yield f"\033[91m❌ Archy Error: API error - {response.status_code}: {error_detail}\033[0m"
+                yield f"\033[91m❌ API Error: {response.status_code}: {error_detail}\033[0m"
                 return
 
-            # Stream the analysis response
-            full_analysis = ""
+            # Stream the response
             for chunk in self._stream_and_collect_response(response):
-                full_analysis += chunk
                 yield chunk
 
-            # Add the analysis to conversation history
-            self.add_to_conversation("assistant", full_analysis)
-
-        except requests.exceptions.RequestException as e:
-            yield f"\033[91m❌ Archy Error: API request failed: {e}\033[0m"
         except Exception as e:
-            yield f"\033[91m❌ Archy Error: An unexpected error occurred: {e}\033[0m"
+            yield f"\033[91m❌ Error generating analysis: {str(e)}\033[0m"
 
     def get_system_info(self) -> str:
         """Get system information via Rust executor"""

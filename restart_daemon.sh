@@ -1,34 +1,23 @@
 #!/bin/bash
-# Quick restart script for Archy daemon
+# Quick restart script for Archy daemon via systemd
 
-echo "🛑 Stopping any running daemon..."
-# Try regular kill first
-pkill -9 archy-executor 2>/dev/null
-# If socket is owned by root, use sudo to clean it
-if [ -S /tmp/archy.sock ]; then
-    SOCKET_OWNER=$(stat -c '%U' /tmp/archy.sock 2>/dev/null)
-    if [ "$SOCKET_OWNER" = "root" ]; then
-        echo "   Socket owned by root, using sudo to clean..."
-        sudo pkill -9 archy-executor 2>/dev/null
-        sudo rm -f /tmp/archy.sock
-    else
-        rm -f /tmp/archy.sock
-    fi
-fi
-sleep 1
+echo "🔄 Restarting Archy Executor Daemon (systemd user service)..."
 
-echo "🚀 Starting daemon with fixed code..."
-cd /home/chef/Archy
-./target/release/archy-executor &
+# Restart the systemd user service
+systemctl --user restart archy-executor.service
 
 sleep 2
 
-if [ -S /tmp/archy.sock ]; then
+# Check if it started successfully
+if systemctl --user is-active --quiet archy-executor.service; then
     echo "✅ Daemon restarted successfully!"
+    echo "   Process: $(pgrep -f 'archy-executor')"
     echo "   Socket: /tmp/archy.sock"
-    echo "   PID: $(pgrep archy-executor)"
+    echo ""
+    echo "View logs with: journalctl --user -u archy-executor.service -f"
 else
-    echo "❌ Failed to start daemon"
+    echo "❌ Failed to restart daemon"
+    echo "Check logs with: journalctl --user -u archy-executor.service -n 50"
     exit 1
 fi
 

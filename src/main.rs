@@ -13,11 +13,12 @@ mod output;
 mod config;
 mod helpers;
 mod tmux;
+mod batch;
 
 use output::DisplayOutput;
 use config::Config;
 use helpers::{response, params, Response};
-use helpers::security::{safe_json_response, escape_pgrep_pattern, is_safe_executable_path, validate_command, validate_desktop_entry};
+use helpers::security::{safe_json_response, escape_pgrep_pattern, validate_command, validate_desktop_entry};
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -134,6 +135,7 @@ fn handle_client(mut stream: UnixStream, config: &Config) -> std::io::Result<()>
         "detect_terminal" => detect_terminal(),
         "launch_fallback_terminal" => launch_fallback_terminal(&request.data),
         "execute_smart" => execute_command_smart(&request.data, config),
+        "batch_execute" => return handle_batch_execute(&mut stream, &request.data, config),
         _ => response::error("Unknown action".to_string()),
     };
 
@@ -908,9 +910,21 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
 
     eprintln!("🔍 Attempting to launch desktop app: {}", desktop_entry);
 
+    // Get current environment variables (DISPLAY, DBUS, etc.) using helpers
+    use helpers::environment;
+    let display = environment::get_display();
+    let xauthority = environment::get_xauthority();
+    let dbus_addr = environment::get_dbus_address();
+
+    eprintln!("  Environment: DISPLAY={}, XAUTHORITY={}", display, xauthority);
+    eprintln!("  DBUS_SESSION_BUS_ADDRESS={}", dbus_addr);
+
     // Try gtk-launch first (most reliable)
     eprintln!("  [1] Trying gtk-launch...");
     let gtk_result = Command::new("gtk-launch")
+        .env("DISPLAY", &display)
+        .env("XAUTHORITY", &xauthority)
+        .env("DBUS_SESSION_BUS_ADDRESS", &dbus_addr)
         .arg(desktop_entry)
         .spawn();
 
@@ -1006,7 +1020,15 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
 
                         eprintln!("    Launching: {} {:?}", exec_path, parts[1..].to_vec());
 
+                        // Get environment variables for GUI support
+                        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+                        let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+                            format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
+                        });
+
                         let result = Command::new(exec_path)
+                            .env("DISPLAY", &display)
+                            .env("XAUTHORITY", &xauthority)
                             .args(&parts[1..])
                             .spawn();
 
@@ -1045,7 +1067,15 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
             if !cmd_path.is_empty() {
                 eprintln!("    Found in PATH: {}", cmd_path);
 
+                // Get environment variables for GUI support
+                let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+                let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+                    format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
+                });
+
                 let spawn_result = Command::new(&cmd_path)
+                    .env("DISPLAY", &display)
+                    .env("XAUTHORITY", &xauthority)
                     .spawn();
 
                 if let Ok(_child) = spawn_result {
@@ -1483,3 +1513,19 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
     send_json_response(stream, &display_output)
 }
 
+/// Handle batch execution of multiple commands
+fn handle_batch_execute(
+    stream: &mut UnixStream,
+    data: &Value,
+    config: &Config,
+) -> std::io::Result<()> {
+    match batch::execute_batch(data, config) {
+        Ok(result) => {
+            send_json_response(stream, &result)
+        }
+        Err(e) => {
+            let error_response = response::error(e);
+            send_json_response(stream, &error_response)
+        }
+    }
+}

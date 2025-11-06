@@ -3,10 +3,11 @@
 
 set -e
 
-ARCHY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Navigate to project root from scripts/install/
-ARCHY_DIR="$(cd "$ARCHY_DIR/../../.." && pwd)"
-SERVICE_FILE="$ARCHY_DIR/archy-executor.service"
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Navigate to project root (../../ from scripts/install/)
+ARCHY_DIR="$(cd "$SCRIPT_DIR/../../" && pwd)"
+SERVICE_FILE="$ARCHY_DIR/archy-executor-user.service"
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
 # Color codes
@@ -18,12 +19,28 @@ NC='\033[0m'
 
 echo -e "${BLUE}[*]${NC} Installing Archy Executor as systemd user service..."
 
+# Verify service file exists
+if [ ! -f "$SERVICE_FILE" ]; then
+    echo -e "${RED}[-]${NC} Service file not found at: $SERVICE_FILE"
+    exit 1
+fi
+
 # Create systemd user directory if it doesn't exist
 mkdir -p "$SYSTEMD_DIR"
 
 # Copy service file
 cp "$SERVICE_FILE" "$SYSTEMD_DIR/archy-executor.service"
 echo -e "${GREEN}[+]${NC} Service file copied to $SYSTEMD_DIR/archy-executor.service"
+
+# Update DISPLAY in the service file to match current environment (only if DISPLAY is set)
+if [ -n "$DISPLAY" ]; then
+    # Use a temporary file to avoid sed errors
+    sed "s|Environment=\"DISPLAY=.*\"|Environment=\"DISPLAY=$DISPLAY\"|g" "$SYSTEMD_DIR/archy-executor.service" > "$SYSTEMD_DIR/archy-executor.service.tmp"
+    mv "$SYSTEMD_DIR/archy-executor.service.tmp" "$SYSTEMD_DIR/archy-executor.service"
+    echo -e "${GREEN}[+]${NC} Updated DISPLAY=$DISPLAY in service file"
+else
+    echo -e "${YELLOW}[!]${NC} DISPLAY not set, using default in service file"
+fi
 
 # Reload systemd daemon
 systemctl --user daemon-reload
@@ -37,23 +54,12 @@ echo -e "${GREEN}[+]${NC} Service enabled for auto-start on login"
 systemctl --user start archy-executor.service
 sleep 2
 
-# Check if it's running
+# Check if service is running
 if systemctl --user is-active --quiet archy-executor.service; then
     echo -e "${GREEN}[+]${NC} Service started successfully!"
-    echo ""
-    echo -e "${GREEN}✓ Archy is now installed as a systemd service!${NC}"
-    echo ""
-    echo "Useful commands:"
-    echo "  systemctl --user status archy-executor.service    # Check service status"
-    echo "  systemctl --user start archy-executor.service     # Start manually"
-    echo "  systemctl --user stop archy-executor.service      # Stop manually"
-    echo "  systemctl --user restart archy-executor.service   # Restart"
-    echo "  systemctl --user disable archy-executor.service   # Disable auto-start"
-    echo "  journalctl --user -u archy-executor.service -f    # View live logs"
-    echo ""
+    echo -e "${GREEN}[+]${NC} Archy Executor is ready to use"
 else
-    echo -e "${RED}[-]${NC} Service failed to start!"
-    echo "Check logs with: journalctl --user -u archy-executor.service -n 50"
-    exit 1
+    echo -e "${YELLOW}[!]${NC} Service may not have started properly"
+    echo -e "${YELLOW}[!]${NC} Check status with: systemctl --user status archy-executor.service"
 fi
 

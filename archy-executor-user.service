@@ -1,0 +1,45 @@
+[Unit]
+Description=Archy Executor Daemon - AI System Assistant (User Service)
+After=graphical-session-pre.target graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/home/chef/Archy/target/release/archy-executor
+
+# Import environment from the session (inherits DISPLAY, DBUS, etc.)
+PassEnvironment=DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+
+# Fallback environment variables if not inherited
+Environment="XAUTHORITY=%h/.Xauthority"
+Environment="XDG_RUNTIME_DIR=/run/user/%U"
+
+# Run in the user's session (required for GUI and D-Bus access)
+Environment="SYSTEMD_USER_SESSION=1"
+
+# Auto-restart configuration
+Restart=always
+RestartSec=2
+
+# Prevent restart storms - allow 5 restarts within 60 seconds
+StartLimitInterval=60
+StartLimitBurst=5
+StartLimitAction=none
+
+# Resource limits to prevent memory exhaustion
+MemoryMax=512M
+# Removed TasksMax - GUI apps like Firefox, Steam, Spotify need many threads
+# TasksMax was causing "Thread creation failed" errors
+
+# Process management
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+# Logging to systemd journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+

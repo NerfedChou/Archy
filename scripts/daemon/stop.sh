@@ -1,17 +1,19 @@
 #!/bin/bash
-# Stop the Archy Rust Executor Daemon
+# Stop the Archy Rust Executor Daemon via systemd user service
 
 echo "🛑 Stopping Archy Executor Daemon..."
 
-# Find and kill the archy-executor process
-pkill -f archy-executor
+# Stop the systemd user service
+systemctl --user stop archy-executor.service
 
-# Remove the socket file
-rm -f /tmp/archy.sock
+sleep 1
 
-if [ $? -eq 0 ]; then
-    echo "✅ Archy executor daemon stopped"
+# Verify it's stopped
+if systemctl --user is-active --quiet archy-executor.service; then
+    echo "⚠️  Service is still running, forcing kill..."
+    pkill -9 archy-executor
+    rm -f /tmp/archy.sock
 else
-    echo "⚠️  No daemon was running"
+    echo "✅ Archy executor daemon stopped"
 fi
 
