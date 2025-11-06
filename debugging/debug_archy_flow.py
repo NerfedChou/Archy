@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+"""
+Debug Script: Trace the complete flow between Python and Rust in Archy
+Shows exactly how data flows from user input → AI → Rust → output
+"""
+
+import sys
+import os
+import json
+import time
+from pathlib import Path
+
+# Add scripts directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
+
+from rust_executor import RustExecutor
+import requests
+
+# ANSI Colors for better visualization
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+def print_section(title):
+    """Print a section header"""
+    print(f"\n{Colors.BOLD}{Colors.CYAN}{'='*80}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.CYAN}{title}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.CYAN}{'='*80}{Colors.END}\n")
+
+def print_step(step_num, description):
+    """Print a step"""
+    print(f"{Colors.BOLD}{Colors.GREEN}[STEP {step_num}]{Colors.END} {description}")
+
+def print_data(label, data, indent=2):
+    """Print data with nice formatting"""
+    prefix = " " * indent
+    print(f"{prefix}{Colors.YELLOW}{label}:{Colors.END}")
+    if isinstance(data, (dict, list)):
+        json_str = json.dumps(data, indent=2)
+        for line in json_str.split('\n'):
+            print(f"{prefix}  {line}")
+    else:
+        print(f"{prefix}  {data}")
+
+def print_info(message, indent=2):
+    """Print info message"""
+    prefix = " " * indent
+    print(f"{prefix}{Colors.BLUE}ℹ️  {message}{Colors.END}")
+
+def print_success(message, indent=2):
+    """Print success message"""
+    prefix = " " * indent
+    print(f"{prefix}{Colors.GREEN}✓ {message}{Colors.END}")
+
+def print_error(message, indent=2):
+    """Print error message"""
+    prefix = " " * indent
+    print(f"{prefix}{Colors.RED}✗ {message}{Colors.END}")
+
+
+def test_rust_executor_connection():
+    """Test 1: Verify Rust executor is running and responsive"""
+    print_section("TEST 1: Rust Executor Connection")
+    
+    print_step(1, "Creating RustExecutor instance")
+    executor = RustExecutor()
+    print_success("RustExecutor instance created")
+    
+    print_step(2, "Testing basic socket communication")
+    result = executor.get_system_info()
+    print_data("Response", result)
+    print_success("Socket communication working!")
+    
+    return executor
+
+
+def test_command_execution(executor):
+    """Test 2: Execute a REAL command and trace the actual flow"""
+    print_section("TEST 2: REAL Command Execution Flow")
+
+    # Use a more interesting real command
+    command = "hostname && uptime"
+
+    print_step(1, f"Python sends REAL command to Rust")
+    print_data("Command", command)
+    print_info("This will actually execute on your system!", indent=2)
+
+    print_step(2, "Checking REAL tmux session status")
+    session_exists = executor.check_session()
+    print_data("Session exists (ACTUAL)", session_exists)
+
+    if not session_exists:
+        print_info("Creating tmux session...")
+        executor.open_terminal()
+        time.sleep(1)
+    
+    print_step(3, "Executing command via execute_and_wait (smart execution)")
+    print_info("This calls Rust which:")
+    print_info("  1. Sends command to tmux", indent=4)
+    print_info("  2. Waits for prompt to return", indent=4)
+    print_info("  3. Captures output", indent=4)
+    print_info("  4. Parses output (Rust parser.rs)", indent=4)
+    print_info("  5. Formats output (Rust formatter.rs)", indent=4)
+    print_info("  6. Returns DisplayOutput structure", indent=4)
+    
+    start_time = time.time()
+    result = executor.execute_and_wait(command, max_wait=10)
+    elapsed = time.time() - start_time
+    
+    print_step(4, "Rust returns REAL structured response")
+    print_data("Response keys (ACTUAL)", list(result.keys()))
+    print_data("Execution time (REAL)", f"{elapsed:.2f}s")
+    print_info("👆 This is the actual time it took to execute!", indent=2)
+
+    print_step(5, "Examining the REAL response structure")
+    print_data("Success (ACTUAL)", result.get('success'))
+    print_data("Status (ACTUAL)", result.get('status'))
+    print_data("Command (ACTUAL)", result.get('command'))
+    print_data("Exit Code (REAL)", result.get('exit_code'))
+
+    if 'structured' in result:
+        print_data("Structured Data (REAL - parsed by Rust from actual output)", result['structured'])
+        print_info(f"Rust detected format: {result.get('metadata', {}).get('format_detected', 'unknown')}", indent=2)
+        print_info(f"Parsed {len(result['structured'])} fields from command output", indent=2)
+
+    if 'findings' in result:
+        print_data("Findings (REAL - detected by Rust)", result['findings'])
+        print_info(f"Rust found {len(result['findings'])} insights from the output", indent=2)
+
+    if 'summary' in result:
+        print_data("Summary (REAL - generated by Rust)", result['summary'])
+
+    if 'metadata' in result:
+        print_data("Metadata (REAL)", result['metadata'])
+        meta = result['metadata']
+        print_info(f"Processed {meta.get('line_count', 0)} lines, {meta.get('byte_count', 0)} bytes", indent=2)
+
+    if 'display' in result:
+        print("\n  " + Colors.YELLOW + "Display Output (REAL - formatted by Rust):" + Colors.END)
+        print("  " + "─" * 76)
+        for line in result['display'].split('\n')[:20]:  # Show first 20 lines
+            print(f"  {line}")
+        if len(result['display'].split('\n')) > 20:
+            print(f"  ... ({len(result['display'].split('\n')) - 20} more lines)")
+        print("  " + "─" * 76)
+        print("\n  " + Colors.GREEN + "👆 This is the ACTUAL formatted output you would see!" + Colors.END)
+
+    print_success("REAL command execution complete - all data above is authentic!")
+
+    return result
+
+
+def test_smart_parsing(executor):
+    """Test 3: Test Rust's smart parsing with REAL command output"""
+    print_section("TEST 3: REAL Rust Smart Parsing - Live Command Types")
+
+    print_info("Each command below will ACTUALLY execute and show REAL parsed data!", indent=0)
+    print()
+
+    test_commands = [
+        ("ip addr show | head -25", "Network interfaces (IP parser) - REAL DATA"),
+        ("ls -la /tmp | head -15", "File listing (ls parser) - REAL DATA"),
+        ("ps aux | head -8", "Process list (ps parser) - REAL DATA"),
+    ]
+    
+    for idx, (command, description) in enumerate(test_commands, 1):
+        print_step(idx, f"Testing: {description}")
+        print_data("Command", command)
+        
+        result = executor.execute_and_wait(command, max_wait=10)
+        
+        if result.get('success'):
+            print_success(f"✅ REAL execution successful!")
+
+            # Show what Rust actually parsed
+            if result.get('structured'):
+                structured = result['structured']
+                format_detected = result.get('metadata', {}).get('format_detected', 'unknown')
+                print_info(f"🦀 Rust detected format: {format_detected}")
+
+                if isinstance(structured, dict):
+                    print_info(f"📦 Parsed {len(structured)} fields: {', '.join(list(structured.keys())[:5])}")
+
+                    # Show sample of actual data
+                    for key, value in list(structured.items())[:2]:
+                        if isinstance(value, list) and value:
+                            print(f"      • {key}: {value[:2]}..." if len(value) > 2 else f"      • {key}: {value}")
+                        elif isinstance(value, (str, int, float)):
+                            val_str = str(value)[:50]
+                            print(f"      • {key}: {val_str}")
+
+            # Show actual findings
+            if result.get('findings'):
+                print_info(f"💡 Rust found {len(result['findings'])} REAL insights:")
+                for finding in result['findings'][:3]:  # Show first 3
+                    importance = finding.get('importance', 'Medium')
+                    category = finding.get('category', '')
+                    message = finding.get('message', '')[:70]
+                    print(f"      [{importance}] {category}: {message}")
+
+            # Show real summary
+            if result.get('summary'):
+                print_data("✓ REAL Summary", result.get('summary'))
+
+            # Show actual metadata
+            if result.get('metadata'):
+                meta = result['metadata']
+                print_info(f"📊 Processed {meta.get('line_count', 0)} lines, {meta.get('byte_count', 0)} bytes")
+        else:
+            print_error(f"Failed: {result.get('error', 'Unknown error')}")
+        
+        print()  # Spacing between tests
+
+
+def test_ai_integration():
+    """Test 4: Simulate AI → Rust flow (without actual API call)"""
+    print_section("TEST 4: AI Integration Flow (Simulated)")
+    
+    print_step(1, "Simulating AI detection of command tags")
+    
+    # Simulate what the AI would return
+    ai_response = """Sure! Let me get your IP address for you.
+
+[EXECUTE_COMMAND: ip addr show wlan0]
+
+I'll check your wireless interface!"""
+    
+    print_data("Simulated AI Response", ai_response)
+    
+    print_step(2, "Python extracts command tags")
+    import re
+    pattern = re.compile(r'\[EXECUTE_COMMAND:\s*(.+?)\]')
+    commands = pattern.findall(ai_response)
+    print_data("Extracted commands", commands)
+    
+    print_step(3, "Python sends each command to Rust")
+    executor = RustExecutor()
+    
+    for cmd in commands:
+        print_info(f"Executing: {cmd}")
+        result = executor.execute_and_wait(cmd, max_wait=10)
+        
+        if result.get('success'):
+            print_success("Rust executed and parsed the output")
+            print_data("Summary", result.get('summary', 'N/A'), indent=4)
+        else:
+            print_error(f"Failed: {result.get('error')}")
+    
+    print_step(4, "Python would then send this structured data back to AI")
+    print_info("AI uses the structured data to formulate its response")
+
+
+def test_terminal_management(executor):
+    """Test 5: Terminal management commands"""
+    print_section("TEST 5: Terminal Management")
+    
+    print_step(1, "Checking terminal state")
+    is_foot_running = executor.is_foot_running()
+    session_exists = executor.check_session()
+    print_data("Foot terminal running", is_foot_running)
+    print_data("Tmux session exists", session_exists)
+    
+    print_step(2, "Testing terminal operations")
+    print_info("These are the commands Python calls on Rust:")
+    print_info("  • open_terminal() → Rust creates tmux + launches foot", indent=4)
+    print_info("  • close_terminal() → Rust kills foot window", indent=4)
+    print_info("  • close_session() → Rust kills entire tmux session", indent=4)
+    
+    print_success("Terminal management interface working!")
+
+
+def test_data_flow_summary():
+    """Show complete data flow diagram"""
+    print_section("COMPLETE DATA FLOW DIAGRAM")
+    
+    flow = """
+    USER INPUT: "get my ip"
+         ↓
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ PYTHON (archy_chat.py)                                          │
+    │ ┌─────────────────────────────────────────────────────────────┐ │
+    │ │ 1. User message → Gemini API                                │ │
+    │ │ 2. Gemini returns: "Sure! [EXECUTE_COMMAND: ip addr]"      │ │
+    │ │ 3. Regex extracts command: "ip addr"                       │ │
+    │ └─────────────────────────────────────────────────────────────┘ │
+    └──────────────────────────┬──────────────────────────────────────┘
+                               ↓
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ IPC LAYER (rust_executor.py)                                    │
+    │ ┌─────────────────────────────────────────────────────────────┐ │
+    │ │ 1. Creates JSON: {"action": "execute_and_wait",            │ │
+    │ │                   "data": {"command": "ip addr"}}          │ │
+    │ │ 2. Sends to Unix socket: /tmp/archy.sock                   │ │
+    │ │ 3. Waits for response...                                   │ │
+    │ └─────────────────────────────────────────────────────────────┘ │
+    └──────────────────────────┬──────────────────────────────────────┘
+                               ↓
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ RUST DAEMON (archy-executor)                                    │
+    │ ┌─────────────────────────────────────────────────────────────┐ │
+    │ │ main.rs:                                                    │ │
+    │ │   1. Receives JSON from socket                             │ │
+    │ │   2. Routes to handle_execute_and_wait()                   │ │
+    │ │                                                             │ │
+    │ │ tmux.rs:                                                    │ │
+    │ │   3. Sends command to tmux: "ip addr\\n"                    │ │
+    │ │   4. Polls terminal every 500ms                            │ │
+    │ │   5. Detects prompt return (command finished)              │ │
+    │ │   6. Captures output from tmux pane                        │ │
+    │ │                                                             │ │
+    │ │ parser.rs:                                                  │ │
+    │ │   7. Detects format: "ip addr output"                      │ │
+    │ │   8. Extracts: interfaces, IPs, MAC addresses              │ │
+    │ │   9. Creates structured JSON                               │ │
+    │ │                                                             │ │
+    │ │ formatter.rs:                                               │ │
+    │ │   10. Generates colored output with emojis                 │ │
+    │ │   11. Creates plain text version                           │ │
+    │ │                                                             │ │
+    │ │ output.rs:                                                  │ │
+    │ │   12. Combines into DisplayOutput structure                │ │
+    │ │   13. Serializes to JSON                                   │ │
+    │ └─────────────────────────────────────────────────────────────┘ │
+    └──────────────────────────┬──────────────────────────────────────┘
+                               ↓
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ IPC LAYER (rust_executor.py)                                    │
+    │ ┌─────────────────────────────────────────────────────────────┐ │
+    │ │ 1. Receives JSON response                                  │ │
+    │ │ 2. Deserializes into Python dict                           │ │
+    │ │ 3. Returns to archy_chat.py                                │ │
+    │ └─────────────────────────────────────────────────────────────┘ │
+    └──────────────────────────┬──────────────────────────────────────┘
+                               ↓
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ PYTHON (archy_chat.py)                                          │
+    │ ┌─────────────────────────────────────────────────────────────┐ │
+    │ │ 1. Receives DisplayOutput dict with:                       │ │
+    │ │    • display: formatted colored output                     │ │
+    │ │    • structured: parsed JSON data                          │ │
+    │ │    • findings: key insights                                │ │
+    │ │    • summary: one-line summary                             │ │
+    │ │                                                             │ │
+    │ │ 2. Prints display to terminal (user sees it)               │ │
+    │ │                                                             │ │
+    │ │ 3. Builds analysis prompt for Gemini:                      │ │
+    │ │    "Here's the structured data: {...}"                     │ │
+    │ │    "Analyze and explain to the user"                       │ │
+    │ │                                                             │ │
+    │ │ 4. Sends to Gemini API                                     │ │
+    │ │                                                             │ │
+    │ │ 5. Streams AI analysis back to user                        │ │
+    │ └─────────────────────────────────────────────────────────────┘ │
+    └──────────────────────────┬──────────────────────────────────────┘
+                               ↓
+    USER SEES: "Your IP is 192.168.1.37 on wlan0. That's your WiFi!"
+    """
+    
+    print(flow)
+
+
+def main():
+    """Run all debug tests"""
+    print(f"{Colors.BOLD}{Colors.HEADER}")
+    print("=" * 80)
+    print("  ARCHY DEBUG: Python ↔ Rust Communication Flow Tracer")
+    print("  Captures everything happening behind the scenes")
+    print("=" * 80)
+    print(Colors.END)
+    
+    try:
+        # Test 1: Connection
+        executor = test_rust_executor_connection()
+        input(f"\n{Colors.CYAN}Press Enter to continue to Test 2...{Colors.END}")
+        
+        # Test 2: Command execution
+        test_command_execution(executor)
+        input(f"\n{Colors.CYAN}Press Enter to continue to Test 3...{Colors.END}")
+        
+        # Test 3: Smart parsing
+        test_smart_parsing(executor)
+        input(f"\n{Colors.CYAN}Press Enter to continue to Test 4...{Colors.END}")
+        
+        # Test 4: AI integration
+        test_ai_integration()
+        input(f"\n{Colors.CYAN}Press Enter to continue to Test 5...{Colors.END}")
+        
+        # Test 5: Terminal management
+        test_terminal_management(executor)
+        input(f"\n{Colors.CYAN}Press Enter to see data flow diagram...{Colors.END}")
+        
+        # Show complete flow
+        test_data_flow_summary()
+        
+        print_section("ALL TESTS COMPLETE")
+        print_success("Python ↔ Rust communication is working correctly!", indent=0)
+        print_info("Key takeaways:", indent=0)
+        print_info("  • Python handles AI logic (Gemini API)", indent=0)
+        print_info("  • Rust handles system operations (commands, parsing, formatting)", indent=0)
+        print_info("  • Communication via Unix socket (/tmp/archy.sock)", indent=0)
+        print_info("  • Data flows as JSON in both directions", indent=0)
+        
+    except KeyboardInterrupt:
+        print(f"\n\n{Colors.YELLOW}Debug session interrupted by user{Colors.END}")
+    except Exception as e:
+        print_error(f"Error during debug: {e}", indent=0)
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    main()
+

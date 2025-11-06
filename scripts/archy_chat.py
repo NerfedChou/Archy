@@ -11,7 +11,7 @@ import sys
 import os
 import re
 import importlib
-from typing import Generator, Optional
+from typing import Generator
 from pathlib import Path
 
 # Import Rust executor for system operations
@@ -88,10 +88,41 @@ class ArchyChat:
 - When opening the terminal again just do it without telling him that you are reopening or without saying "I'm here". Just reattach silently.
 
 **Your Core Superpower - Command Execution:**
+
+🚨 **CRITICAL RULE: WHEN USER SAYS AN ACTION WORD, YOU EXECUTE, NOT EXPLAIN!** 🚨
+
+If Master Angulo says: "open terminal", "list files", "scan network", "get my IP", etc.
+→ These are ACTION requests, not questions!
+→ You MUST include [EXECUTE_COMMAND: ...] tags in your response
+→ Don't just say "Sure, I'll do that" - ACTUALLY DO IT with tags!
+
+**Exception:** If Master Angulo asks "did you...", "why did...", "what happened..." - these are QUESTIONS about past actions, so just answer them.
+
 1.  **Understand the Mission:** Figure out what Master Angulo actually wants to do.
 2.  **Plan the Attack:** Think through the best command(s) to make it happen.
 3.  **Ask Before You Break Stuff:** Destructive commands (sudo, rm, pacman -Syu, etc.) need a heads-up first. Safe commands? Just do it.
 4.  **Execute Like a Boss:** Use `[EXECUTE_COMMAND: your_command_here]` format for EVERYTHING!
+5.  **🎯 BATCH EXECUTION - Run Multiple Commands:**
+    - You can execute MULTIPLE commands in ONE response!
+    - Just include multiple `[EXECUTE_COMMAND: ...]` tags
+    - Example: `[EXECUTE_COMMAND: pwd]` and `[EXECUTE_COMMAND: ls -la]`
+    - All commands run in sequence automatically
+    - GUI apps launch simultaneously, CLI commands run one after another
+    - Perfect for: "get my IP and scan the network" → two commands!
+    - Terminal stays open throughout batch execution
+    
+    🚨 **CRITICAL RULE: EXECUTE ALL REQUESTED COMMANDS AT ONCE!** 🚨
+    If Master Angulo asks for multiple steps (e.g., "list files, find X, go inside, open Y"):
+    ✅ DO THIS: Include ALL command tags in your FIRST response:
+       [EXECUTE_COMMAND: ls -la]
+       [EXECUTE_COMMAND: cd Downloads]
+       [EXECUTE_COMMAND: firefox]
+    
+    ❌ DON'T DO THIS: Execute one command, wait for analysis, then execute another
+    
+    **You get ONE shot to execute the full request. Make it count!**
+    The system will run all commands in sequence and THEN provide analysis.
+    Don't be timid - if you know what needs to be done, DO IT ALL AT ONCE!
     
     **The system is SMART - it automatically detects what you're trying to do:**
     
@@ -246,6 +277,32 @@ You: "Sure! Let me launch Firefox!" ← No tag = nothing happens!
 - `[CLOSE_TERMINAL]` ← ONLY when user says "close terminal"
 - `[CHECK_TERMINAL]` ← ONLY when user says "check terminal" or command already ran
 
+**🧠 UNDERSTANDING CASUAL/TYPO-FILLED REQUESTS:**
+
+Master Angulo might type fast or casually. You MUST understand intent even with typos:
+
+Examples of "dumb" requests you MUST handle:
+- "get my ip and then scan how many conencted device i have" → Get IP + scan network
+- "goto home list directories find downloads then go inside" → cd ~, ls, cd Downloads
+- "open firfox" → Launch firefox (understand typo)
+- "list files find the download folder go in it" → ls, cd Downloads
+
+**HOW TO HANDLE:**
+1. Parse the intent: What is the user ACTUALLY trying to do?
+2. Identify ALL action steps mentioned
+3. Execute ALL steps in ONE response with multiple [EXECUTE_COMMAND] tags
+4. Don't ask for clarification unless truly ambiguous
+
+**Common patterns:**
+- "goto X" = cd X
+- "list (directories|files|items)" = ls or ls -la
+- "find X" = look for X in ls output or use find command
+- "go inside X" = cd X
+- "open/launch X" = execute X (GUI or command)
+- "how many X" = count results (use wc, grep, etc.)
+
+**BE SMART - INFER INTENT!** Even if the grammar is broken, you know what they want.
+
 **Personality in Action:**
 
 Bad: "I have executed the command. Please advise if additional actions are required."
@@ -285,26 +342,6 @@ Keep it concise, skip irrelevant sections, and maintain your casual personality 
 
 You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely invested in making this work together."""
 
-    def detect_terminal(self) -> tuple:
-        """Detect available terminal emulator via Rust executor.
-        Returns (command, args_template) or (None, None) if not found."""
-        result = self.rust_executor.detect_terminal()
-        if result:
-            return (result.get('terminal'), result.get('args', []))
-        return (None, None)
-
-    def find_desktop_entry(self, app_name: str) -> Optional[str]:
-        """Search for a .desktop file matching the app name - EXACT matches only (via Rust)"""
-        return self.rust_executor.find_desktop_entry(app_name)
-
-    def send_command_to_tmux(self, command: str, session: str = "archy_session") -> bool:
-        """Send a command to the tmux session (non-blocking, runs in background) via Rust executor"""
-        result = self.rust_executor.execute_in_tmux(command, session)
-        return result.get("success", False)
-
-    def reopen_foot_if_needed(self, session: str = "archy_session") -> bool:
-        """Reopen foot window if it's closed but tmux session still exists via Rust executor"""
-        return self.rust_executor.open_terminal()
 
     def open_terminal_session(self, session: str = "archy_session") -> bool:
         """Open a terminal session (tmux + foot) via Rust executor.
@@ -322,30 +359,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
     def cleanup(self):
         """Clean up resources when Archy exits"""
         session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-        self.close_tmux_session(session)
-
-    def capture_tmux_output(self, session: str = "archy_session", lines: int = 100) -> str:
-        """Capture the visible pane output from tmux session via Rust executor"""
-        return self.rust_executor.capture_output(lines=lines, session=session)
-
-    def extract_current_directory(self, terminal_output: str) -> Optional[str]:
-        """Extract the current working directory from the terminal prompt (via Rust)"""
-        return self.rust_executor.extract_current_directory(terminal_output)
-
-    def execute_command_in_terminal(self, command: str) -> str:
-        """Execute a command using Rust executor's smart execution.
-        Automatically handles GUI apps, CLI commands via tmux, and fallback terminal launch.
-        All execution logic is now in Rust - Python only makes the decision to execute."""
-        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-
-        # Delegate everything to Rust's smart execution
-        result = self.rust_executor.execute_command_smart(command, session)
-
-        if result.get('success'):
-            return result.get('output', f"✓ Command executed: {command}")
-        else:
-            error = result.get('error', 'Unknown error')
-            return f"❌ Execution failed: {error}"
+        self.rust_executor.close_session(session)
 
     def reset_state(self):
         """Reset conversation and terminal history."""
@@ -405,10 +419,8 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 analysis_prompt += f"- {finding.get('category', 'Info')}: {finding.get('message', '')}\n"
             analysis_prompt += "\n"
 
-        # Include structured data
-        structured = result.get('structured', {})
-        if structured and structured != {}:
-            analysis_prompt += f"**Structured Data:**\n```json\n{json.dumps(structured, indent=2)}\n```\n\n"
+        # Note: Structured data is kept internal, not shown to user or in prompts
+        # The findings and summary are sufficient for AI analysis
 
         analysis_prompt += "**ANALYSIS REQUIRED:**\n"
         analysis_prompt += "Based on the structured output above, provide:\n\n"
@@ -432,150 +444,133 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             yield chunk
         yield "\n"
 
-    def summarize_terminal_output(self, terminal_output: str) -> str:
-        """Produce a quick structured summary and security-focused suggestions from terminal output.
 
-        This uses heuristics to extract ports, services, errors and common security flags.
-        Returns a human-readable string following the structured format used elsewhere.
+    def _preprocess_user_input(self, user_input: str) -> str:
         """
-        # Quick helpers
-        lines = [l.strip() for l in terminal_output.splitlines() if l.strip()]
-        text = terminal_output
-
-        # Find IPs and hostnames
-        ips = set(re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b", text))
-
-        # Detect open ports (nmap-like lines)
-        port_lines = []
-        for l in lines:
-            if re.search(r"\d{1,5}/(tcp|udp)", l) and ('open' in l or 'filtered' in l or 'closed' in l):
-                port_lines.append(l)
-
-        # Generic service detections by well-known ports
-        service_summaries = []
-        port_map = {}
-        for pl in port_lines:
-            m = re.match(r"(\d{1,5})/(tcp|udp)\s+(\w+)\s+(open|filtered|closed)\s*(.*)", pl)
-            if m:
-                port = int(m.group(1))
-                proto = m.group(2)
-                svc = m.group(3)
-                state = m.group(4)
-                rest = m.group(5).strip()
-                port_map[port] = {"proto": proto, "service": svc, "state": state, "details": rest}
-                service_summaries.append(f"{port}/{proto} {state} {svc} {(' - ' + rest) if rest else ''}")
-
-        # Fallback: look for common service strings anywhere
-        common_services = {
-            22: 'ssh', 80: 'http', 443: 'https', 23: 'telnet', 445: 'microsoft-ds',
-            3306: 'mysql', 3389: 'rdp', 139: 'netbios-ssn', 21: 'ftp', 25: 'smtp'
+        Preprocess user input to make it clearer for the AI.
+        Handles common typos, clarifies intent, and adds context.
+        """
+        # Fix common typos and abbreviations
+        replacements = {
+            r'\bconencted\b': 'connected',
+            r'\bdevices?\s+i\s+have\b': 'devices on my network',
+            r'\bfirfox\b': 'firefox',
+            r'\bfirefx\b': 'firefox',
+            r'\bchrome\b': 'google-chrome',
+            r'\bgoto\s+home\b': 'go to home directory',
+            r'\blist\s+(the\s+)?director(y|ies)\b': 'list directories',
+            r'\blist\s+(the\s+)?items?\b': 'list files',
+            r'\blist\s+(the\s+)?files?\b': 'list files',
+            r'\bfind\s+(the\s+)?(\w+)(\s+folder)?\b': r'find the \2 directory',
+            r'\bgo\s+inside\s+(\w+)\b': r'navigate into \1',
+            r'\bopen\s+(\w+)\s*$': r'launch \1',
+            r'\blstopo\b': 'lstopo',  # Common typo from example
         }
-        for p, s in common_services.items():
-            if str(p) in text and p not in port_map:
-                # crude presence check
-                port_map.setdefault(p, {"proto": 'tcp', "service": s, "state": 'unknown', 'details': ''})
 
-        # Detect errors and noteworthy strings
-        notes = []
-        if re.search(r"permission denied", text, re.I):
-            notes.append("Permission denied errors present - some actions require elevated privileges.")
-        if re.search(r"connection refused", text, re.I):
-            notes.append("Connection refused - target service closed or firewall blocking.")
-        if re.search(r"no route to host|network is unreachable", text, re.I):
-            notes.append("Network connectivity issues detected (no route / unreachable).")
-        if re.search(r"timeout", text, re.I):
-            notes.append("Timeouts observed - network latency or filtering may be present.")
-        if re.search(r"unauthorized|authentication failed|invalid credentials", text, re.I):
-            notes.append("Authentication failures - credentials rejected or insufficient privileges.")
+        processed = user_input
+        for pattern, replacement in replacements.items():
+            processed = re.sub(pattern, replacement, processed, flags=re.IGNORECASE)
 
-        # Security flags from service/version strings
-        security_warnings = []
-        if re.search(r"\bsslv3\b|deprecated ssl|weak encryption|rc4", text, re.I):
-            security_warnings.append("Detected weak/deprecated TLS/SSL usage (e.g. SSLv3/RC4).")
-        if re.search(r"cve-?\d{4}-\d{4,}", text, re.I):
-            security_warnings.append("Explicit CVE references found - check CVE details.")
-        if re.search(r"anonymous login|anonymous access", text, re.I):
-            security_warnings.append("Anonymous access enabled on a service (e.g. FTP/SMB) - review access controls.")
+        # If user lists multiple steps, make it crystal clear
+        multi_step_indicators = [' and then ', ' then ', ', then', ' and ']
+        has_multi_steps = any(indicator in processed.lower() for indicator in multi_step_indicators)
 
-        # Build suggestions based on detected services
-        suggestions = []
-        if any(p in port_map for p in (22,)):
-            suggestions.append("SSH (22): verify key-based auth, disable root login, ensure up-to-date OpenSSH and rate-limit failed attempts (fail2ban).")
-        if any(p in port_map for p in (80, 443)):
-            suggestions.append("HTTP(S): run web enumeration (nikto, gobuster/dirb), check headers for security misconfigurations, and review TLS configuration.")
-        if any(p in port_map for p in (21, 23)):
-            suggestions.append("FTP/Telnet: avoid plaintext protocols - disable telnet and require secure alternatives (SFTP/FTPS).")
-        if any(p in port_map for p in (445, 139)):
-            suggestions.append("SMB: enumerate shares (smbclient/enum4linux), check for exposed writeable shares and patch known SMB CVEs.")
-        if any(p in port_map for p in (3306,)):
-            suggestions.append("Database ports: ensure authentication, bind to localhost if not needed externally, and keep DB software updated.")
-        if any(p in port_map for p in (3389,)):
-            suggestions.append("RDP: if exposed, restrict access via VPN or firewall and enforce strong NLA (Network Level Authentication).")
-        if re.search(r"vulnerab|exploit|overflow|stack|buffer", text, re.I):
-            suggestions.append("Potential vulnerability indicators found - consider deeper vulnerability scanning (nmap NSE, OpenVAS, or commercial scanners).")
+        if has_multi_steps:
+            # Add a clear instruction to execute all steps
+            processed = f"{processed}\n\n**IMPORTANT: Execute ALL these steps in ONE response using multiple [EXECUTE_COMMAND: ...] tags. Do not wait between steps.**"
 
-        # Generic next steps
-        suggestions.append("Run targeted enumeration tools (nmap -sV -sC, nikto, gobuster, enum4linux) and gather service versions for CVE lookups.")
-
-        # Topics for further exploration
-        topics = [
-            "Service enumeration and fingerprinting",
-            "Vulnerability scanning and CVE matching",
-            "Network hardening and firewall rules",
-            "Secure configuration (SSH, TLS, DB)",
-            "Post-discovery: exploitation vs responsible disclosure"
-        ]
-
-        # Build Key Points
-        key_points = []
-        if ips:
-            key_points.append(f"IPs observed: {', '.join(sorted(ips))}")
-        if service_summaries:
-            key_points.append("Detected services/ports: " + "; ".join(service_summaries[:5]))
-        if notes:
-            key_points.extend(notes[:3])
-        if security_warnings:
-            key_points.extend(security_warnings[:2])
-
-        # Construct output string in the expected structured format
-        out = "1. 📊 Summary:\n"
-        summary_sent = []
-        if service_summaries:
-            summary_sent.append(f"Found {len(service_summaries)} port/service lines (e.g. {', '.join([s.split()[0] for s in service_summaries[:3]])}).")
-        if notes:
-            summary_sent.append(notes[0])
-        if not summary_sent:
-            summary_sent.append("Terminal output captured; no obvious open services detected by heuristics.")
-        out += " ".join(summary_sent) + "\n\n"
-
-        out += "2. 🔍 Key Points:\n"
-        for kp in key_points[:5]:
-            out += f"- {kp}\n"
-        if not key_points:
-            out += "- No clear key points detected.\n"
-        out += "\n3. 💡 Suggestions:\n"
-        for s in suggestions[:6]:
-            out += f"- {s}\n"
-        out += "\n4. 🔒 Security Notes:\n"
-        if security_warnings:
-            for w in security_warnings:
-                out += f"- {w}\n"
-        else:
-            out += "- No immediate CVE or weak-crypto patterns detected by heuristics.\n"
-        out += "\n5. 📚 Topics for Further Exploration:\n"
-        for t in topics:
-            out += f"- {t}\n"
-
-        return out
+        return processed
 
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
 
-        # Add user message to history
-        self.conversation_history.append({"role": "user", "content": user_input})
+        # 🎯 PREPROCESS: Clean up and clarify user input
+        processed_input = self._preprocess_user_input(user_input)
 
-        # Build system context
-        context = f"\n\n[System Context: {self.get_system_info()}]\n[{self.get_available_tools()}]"
+        # 🎯 ACTION INTENT DETECTION - Detect if user wants an action, not explanation
+        user_input_lower = processed_input.lower().strip()
+
+        # Check if this is an action request (not a question about past actions)
+        action_verbs = ['open', 'close', 'launch', 'start', 'run', 'execute', 'scan', 'check',
+                       'list', 'show', 'find', 'search', 'get', 'fetch', 'download',
+                       'install', 'remove', 'kill', 'stop', 'restart', 'reboot',
+                       'goto', 'go to', 'navigate', 'cd ', 'change to']
+
+        has_action_verb = any(verb in user_input_lower for verb in action_verbs)
+
+        # Check if user is asking about something that already happened
+        past_tense_indicators = ['did you', 'why did', 'what happened', 'what did',
+                                'was there', 'were there', 'have you']
+        is_asking_about_past = any(indicator in user_input_lower for indicator in past_tense_indicators)
+
+        # If user wants action (not asking about past), add emphasis
+        if has_action_verb and not is_asking_about_past:
+            processed_input += "\n\n**USER WANTS ACTION: Execute the requested commands immediately using [EXECUTE_COMMAND: ...] tags. Do not just explain what you would do - DO IT!**"
+
+        # 🎯 DIRECT USER INTENT DETECTION - Check if user explicitly wants terminal actions
+        user_input_lower = processed_input.lower().strip()
+
+        # Check for direct "open terminal" commands
+        if any(phrase in user_input_lower for phrase in [
+            "open terminal", "open a terminal", "open the terminal",
+            "reopen terminal", "reopen the terminal", "show terminal",
+            "can you open", "please open", "open it again"
+        ]) and len(user_input.split()) <= 10:  # Short, direct commands
+            # User clearly wants to open terminal - force action
+            session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+            result = self.rust_executor.send_command("open_terminal", {})
+            if result.get("success"):
+                yield "\n\033[92m✓ Terminal session opened! You're all set. 🚀\033[0m\n"
+            else:
+                yield f"\n\033[91m✗ Failed to open terminal: {result.get('error', 'Unknown error')}\033[0m\n"
+            return  # Don't send to AI, action already done
+
+        # Check for direct "close terminal" commands
+        if any(phrase in user_input_lower for phrase in [
+            "close terminal", "close the terminal", "hide terminal",
+            "close it"
+        ]) and len(user_input.split()) <= 8:  # Short, direct commands
+            result = self.rust_executor.close_terminal()
+            if result:
+                yield "\n\033[92m✓ Terminal closed\033[0m\n"
+            else:
+                yield "\n\033[93m✗ Terminal wasn't running, but no worries!\033[0m\n"
+            return  # Don't send to AI, action already done
+
+        # Check for direct "close session" commands
+        if any(phrase in user_input_lower for phrase in [
+            "close session", "close the session", "kill session",
+            "end session", "terminate session"
+        ]) and len(user_input.split()) <= 8:
+            print("\033[93m[!] Are you sure you want to close the tmux session? (yes/no)\033[0m")
+            sys.stdout.write(">>> ")
+            sys.stdout.flush()
+            confirm = sys.stdin.readline().strip().lower()
+            if confirm == 'yes':
+                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                if self.rust_executor.close_session(session):
+                    yield "\n\033[92m✓ Tmux session closed successfully. See you next time! 👋\033[0m\n"
+                    self.reset_state()
+                else:
+                    yield "\n\033[91m✗ Failed to close session\033[0m\n"
+            else:
+                yield "\n\033[93mSession close cancelled.\033[0m\n"
+            return  # Don't send to AI, action already done
+
+        # Add user message to history (use processed input for better AI understanding)
+        self.conversation_history.append({"role": "user", "content": processed_input})
+
+        # Build system context with recent command history
+        context = f"\n\n[System Context: {self.rust_executor.get_system_info()}]\n[{self.get_available_tools()}]"
+
+        # Add recent terminal history context if any
+        if self.terminal_history:
+            recent_commands = self.terminal_history[-3:]  # Last 3 commands
+            context += "\n\n[Recent Commands Executed:"
+            for cmd_entry in recent_commands:
+                context += f"\n  • {cmd_entry.get('command', 'unknown')}: {cmd_entry.get('summary', 'no summary')[:100]}"
+            context += "]\n**Note: These commands already ran. Don't re-execute unless explicitly asked to!**"
+
         messages = [{"role": "system", "content": self.system_prompt + context}] + self.conversation_history
 
         payload = {
@@ -608,31 +603,61 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             full_response = ""
             for chunk in self._stream_and_collect_response(response):
                 full_response += chunk
-                yield chunk
+                yield chunk  # ← YIELD to the caller so they can display it!
 
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": full_response})
 
-            # 🔍 Smart Detection: Check if AI is talking about terminal actions without using tags
+            # 🔍 Smart Detection: Check if AI is talking about actions without using tags
             response_lower = full_response.lower()
 
             # Detect if AI is claiming to open terminal without tag
             if any(phrase in response_lower for phrase in [
                 "opening terminal", "opening it", "opening the terminal",
                 "i'm opening", "i'll open", "let me open", "opening now",
-                "get that terminal open", "terminal open for you"
-            ]) and "[OPEN_TERMINAL]" not in full_response:
-                yield "\n\033[91m⚠️ [SYSTEM] AI claimed to open terminal but forgot the tag! Auto-correcting...\033[0m\n"
+                "get that terminal open", "terminal open for you",
+                "terminal comin", "terminal coming", "fresh terminal",
+                "terminal, ready", "open a terminal", "opening a terminal",
+                "reopen terminal", "reopening terminal", "reopen the terminal",
+                "reattach", "terminal window", "fire up", "spin up",
+                "bringing up", "popping up"
+            ]) and "[OPEN_TERMINAL]" not in full_response and "[REOPEN_TERMINAL]" not in full_response:
+                yield "\n\033[93m⚠️ [AUTO-CORRECT] AI talked about opening terminal but forgot tag. Fixing...\033[0m\n"
                 # Auto-trigger the action
                 full_response += " [OPEN_TERMINAL]"
 
             # Detect if AI is claiming to close terminal without tag
             if any(phrase in response_lower for phrase in [
                 "closing terminal", "closing it", "closing the terminal",
-                "i'm closing", "i'll close", "let me close"
+                "i'm closing", "i'll close", "let me close", "closing now",
+                "close terminal", "shut down terminal", "shutting down",
+                "kill terminal", "killing terminal", "terminal window closed",
+                "detach", "hide terminal", "hiding terminal"
             ]) and "[CLOSE_TERMINAL]" not in full_response:
-                yield "\n\033[91m⚠️ [SYSTEM] AI claimed to close terminal but forgot the tag! Auto-correcting...\033[0m\n"
+                yield "\n\033[93m⚠️ [AUTO-CORRECT] AI talked about closing terminal but forgot tag. Fixing...\033[0m\n"
                 full_response += " [CLOSE_TERMINAL]"
+
+            # 🎯 NEW: Detect if AI talks about executing commands without actually including tags
+            command_talk_patterns = [
+                (r"(?:i'll|i will|let me|i'm going to|gonna) (?:run|execute|launch|open|start) (?:the )?(.+?)(?:\.|!|,|$)",
+                 "mentioned executing"),
+                (r"(?:running|executing|launching) (?:the )?(.+?)(?:\.|!|,| for you| now|$)",
+                 "claimed to be executing"),
+                (r"(?:let's|i'll) (?:get|grab|fetch) (?:your|the) (.+?)(?:\.|!|,|$)",
+                 "said they'd get"),
+            ]
+
+            # Only check if no EXECUTE_COMMAND tags exist
+            if "[EXECUTE_COMMAND:" not in full_response:
+                for pattern, action_desc in command_talk_patterns:
+                    matches = re.finditer(pattern, response_lower)
+                    for match in matches:
+                        command_hint = match.group(1).strip()
+                        # Simple heuristic: if it's a single word or common command pattern
+                        if command_hint and len(command_hint.split()) <= 4:
+                            yield f"\n\033[93m⚠️ [AUTO-CORRECT] AI {action_desc} '{command_hint}' but no command tag found.\033[0m\n"
+                            yield f"\033[93m   The AI needs to use [EXECUTE_COMMAND: ...] tags to actually execute commands!\033[0m\n"
+                            break  # Only show warning once per response
 
             # Check for special terminal/session management commands
             # These are generated by the AI when it decides to manage the terminal
@@ -659,7 +684,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         yield f"\033[91m  Error: {error_msg}\033[0m\n"
 
             if "[CLOSE_TERMINAL]" in full_response:
-                result = self.close_foot_window()
+                result = self.rust_executor.close_terminal()
                 if result:
                     yield "\n\033[92m✓ Terminal window closed\033[0m\n"
                 else:
@@ -672,7 +697,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                 confirm = sys.stdin.readline().strip().lower()
                 if confirm == 'yes':
                     session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                    if self.close_tmux_session(session):
+                    if self.rust_executor.close_session(session):
                         yield "\n\033[92m✓ Session closed\033[0m\n"
                         self.reset_state()
                     else:
@@ -699,140 +724,131 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             commands_to_run = unique_commands
 
             if commands_to_run:
-                for command in commands_to_run:
-                    # 🛡️ SAFETY FILTER: Block dangerous self-referential commands
-                    # These commands would cause deadlocks or unexpected behavior
+                # 🎯 BATCH EXECUTION: Ensure terminal is ready for multiple commands
+                session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
 
+                # Check if session exists, create if needed
+                if not self.rust_executor.check_session():
+                    yield f"\n\033[93m⚙️  Creating terminal session...\033[0m\n"
+                    self.rust_executor.open_terminal()
+                    import time
+                    time.sleep(0.5)  # Brief wait for session setup
+
+                # Separate GUI apps from CLI commands
+                gui_apps = []
+                cli_commands = []
+
+                for command in commands_to_run:
                     command_lower = command.lower().strip()
 
-                    # Special case: simple "exit" or "exit 0" is OK - just closes the shell
-                    # But warn the user what will happen
+                    # Safety checks first
                     if command_lower == 'exit' or command_lower.startswith('exit '):
-                        yield f"\n\033[93m⚠️ Note: 'exit' will close the shell, but I'll still be here in the background!\033[0m\n"
-                        # Execute it - it's safe, just closes the shell
-                        execution_result = self.execute_command_in_terminal(command)
-                        yield f"\033[93m{execution_result}\033[0m\n"
+                        yield f"\n\033[93m⚠️ Skipping 'exit' command in batch execution\033[0m\n"
                         continue
 
-                    # Block truly dangerous patterns
                     dangerous_patterns = [
-                        'tmux kill-session',
-                        'tmux kill-server',
-                        'tmux detach',
-                        'tmux attach',
-                        'tmux new-session',
-                        'tmux send-keys',
+                        'tmux kill-session', 'tmux kill-server', 'tmux detach',
+                        'tmux attach', 'tmux new-session', 'tmux send-keys',
                     ]
 
-                    is_dangerous = any(pattern in command_lower for pattern in dangerous_patterns)
+                    if any(pattern in command_lower for pattern in dangerous_patterns):
+                        yield f"\n\033[93m⚠️ Skipping dangerous command: {command}\033[0m\n"
+                        continue
 
-                    if is_dangerous:
-                        if 'kill-session' in command_lower:
-                            yield f"\n\033[93m⚠️ Cannot execute 'tmux kill-session' from inside the session (would cause deadlock).\033[0m\n"
-                            yield f"\033[93m💡 Use the proper method: just say 'close session' and I'll handle it safely!\033[0m\n"
+                    # Check if GUI or CLI
+                    parts = command.split()
+                    if parts:
+                        app_name = parts[0].split('/')[-1]
+                        if self.rust_executor.find_desktop_entry(app_name):
+                            gui_apps.append(command)
                         else:
-                            yield f"\n\033[93m⚠️ Blocked dangerous tmux command: {command}\033[0m\n"
-                            yield f"\033[93m💡 Please use natural language commands like 'close terminal' or 'close session' instead.\033[0m\n"
-                        continue
+                            cli_commands.append(command)
 
-                    # Safe to execute
-                    # NEW WAY: Use execute_analyzed - Rust handles execution, waiting, parsing, and formatting!
-                    session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
+                # Launch all GUI apps (non-blocking)
+                for gui_cmd in gui_apps:
+                    quick_check = self.rust_executor.execute_command_smart(gui_cmd, session)
+                    if quick_check.get('success'):
+                        yield f"\n\033[92m{quick_check.get('output', 'GUI app launched')}\033[0m\n"
+                    else:
+                        yield f"\n\033[91m❌ Failed to launch: {gui_cmd}\033[0m\n"
 
-                    # First send to smart executor to check if it's a GUI app
-                    quick_check = self.rust_executor.execute_command_smart(command, session)
-                    if not quick_check.get('success'):
-                        yield f"\n\033[91m❌ {quick_check.get('error', 'Execution failed')}\033[0m\n"
-                        continue
+                # Execute all CLI commands in sequence (blocking, with analysis)
+                if cli_commands:
+                    if len(cli_commands) > 1:
+                        yield f"\n\033[96m⚡ Executing {len(cli_commands)} commands in sequence...\033[0m\n"
 
-                    # If it's a GUI app, we're done
-                    if "GUI app" in quick_check.get('output', '') or "launched detached" in quick_check.get('output', ''):
-                        yield f"\n\033[92m{quick_check.get('output')}\033[0m\n"
-                        continue
+                    for idx, command in enumerate(cli_commands, 1):
+                        if len(cli_commands) > 1:
+                            yield f"\n\033[96m[{idx}/{len(cli_commands)}] {command}\033[0m\n"
 
-                    # For CLI commands, the command is ALREADY EXECUTED by execute_command_smart
-                    # We just need to wait for it to complete and capture the output
-                    if self.check_command_available('tmux'):
-                        try:
-                            import time
+                        # Use Rust's SMART execute_and_wait for proper command completion detection!
+                        # This automatically waits for the command to finish using prompt detection
+                        result = self.rust_executor.execute_and_wait(
+                            command=command,
+                            session=session,
+                            max_wait=300,  # 5 minutes max
+                            interval_ms=500  # Check every 500ms
+                        )
 
-                            # NOTE: Command already executed by execute_command_smart above!
-                            # DON'T execute again - just wait and capture
+                        if not result.get('success'):
+                            yield f"\n\033[91m❌ {result.get('error', 'Execution failed')}\033[0m\n"
+                            continue
 
-                            # Smart waiting: poll until output stabilizes
-                            # This works for ANY command without knowing how long it takes!
-                            last_output = ""
-                            stable_count = 0
-                            max_wait = 300  # 5 minutes max
-                            start_time = time.time()
+                        # Display the output from Rust's execute_and_wait (HIDE internal JSON, only show formatted display)
+                        display = result.get('display', '')
+                        if display:
+                            yield f"\n{display}\n"
 
-                            while time.time() - start_time < max_wait:
-                                time.sleep(0.5)  # Check every 500ms
-                                current_output = self.rust_executor.capture_output(lines=50, session=session)
+                        # Store STRUCTURED data in terminal history
+                        self.terminal_history.append({
+                            "command": command,
+                            "structured": result.get('structured', {}),
+                            "findings": result.get('findings', []),
+                            "summary": result.get('summary', '')
+                        })
 
-                                if current_output == last_output:
-                                    stable_count += 1
-                                    if stable_count >= 6:  # 3 seconds of no changes = probably done
-                                        break
+                        # CRITICAL: Add the command output to conversation history so AI remembers REAL results
+                        output_context = f"\n[Command '{command}' completed]\n"
+                        output_context += f"Status: {result.get('status', 'unknown')}\n"
+                        output_context += f"Summary: {result.get('summary', 'No summary')}\n"
+
+                        # Add findings if any
+                        findings = result.get('findings', [])
+                        if findings:
+                            output_context += "Key findings:\n"
+                            for finding in findings[:5]:  # Max 5 findings
+                                if isinstance(finding, dict):
+                                    output_context += f"  - {finding.get('message', finding.get('category', 'Info'))}\n"
                                 else:
-                                    stable_count = 0
-                                    last_output = current_output
+                                    output_context += f"  - {str(finding)}\n"
 
-                            # Now capture and analyze the complete output
-                            result = self.rust_executor.capture_analyzed(
-                                command=command,
-                                lines=200,
-                                session=session
-                            )
+                        # Add to conversation so AI remembers the REAL output
+                        self.conversation_history.append({
+                            "role": "user",
+                            "content": output_context
+                        })
 
-                            # Check if we timed out
-                            if time.time() - start_time >= max_wait:
-                                yield f"\n⏱️ Command may still be running (waited {max_wait}s). Showing current output:\n"
+                        # ✨ Trigger AI analysis after command completes (only for last command in batch)
+                        if idx == len(cli_commands):
+                            yield "\n\033[92m📊 AI Analysis:\033[0m\n\n"
 
-                            # Display the output
-                            display = result.get('display', '')
-                            if display:
-                                yield f"\n{display}\n"
+                            # Build analysis request
+                            analysis_request = "Based on the command output(s) above, provide a brief analysis:\n"
+                            analysis_request += "1. **💡 Interpretation:** What does this mean? (1-2 sentences)\n"
+                            analysis_request += "2. **🎯 Next Steps:** What should we do next? (if applicable)\n"
+                            analysis_request += "3. **🔒 Security Notes:** Any security concerns? (only if relevant)\n"
 
-                            # Store STRUCTURED data in terminal history
-                            self.terminal_history.append({
-                                "command": command,
-                                "structured": result.get('structured', {}),
-                                "findings": result.get('findings', []),
-                                "summary": result.get('summary', '')
-                            })
-
-                            # CRITICAL: Add the command output to conversation history
-                            # So the AI knows what actually happened and doesn't hallucinate!
-                            output_context = f"\n[Command '{command}' completed]\n"
-                            output_context += f"Summary: {result.get('summary', 'No summary')}\n"
-
-                            # Add findings if any
-                            findings = result.get('findings', [])
-                            if findings:
-                                output_context += "Findings:\n"
-                                for finding in findings[:5]:  # Max 5 findings
-                                    output_context += f"  - {finding.get('message', '')}\n"
-
-                            # Add structured data (the actual facts!)
-                            structured = result.get('structured', {})
-                            if structured and structured != {}:
-                                output_context += f"Data: {json.dumps(structured, indent=2)[:500]}\n"
-
-                            # CRITICAL: If structured data is minimal/empty, include raw output!
-                            # Many commands (journalctl, grep, etc.) have important info in raw text
-                            raw_output = result.get('raw', '')
-                            if raw_output and (not structured or len(str(structured)) < 50):
-                                output_context += f"\nRaw output (first 1000 chars):\n{raw_output[:1000]}\n"
-
-                            # Add to conversation so AI remembers the REAL output
+                            # Add to conversation
                             self.conversation_history.append({
                                 "role": "user",
-                                "content": output_context
+                                "content": analysis_request
                             })
 
-                        except Exception as e:
-                            yield f"\n\033[91m❌ Error: {e}\033[0m\n"
+                            # Generate AI analysis
+                            for chunk in self._generate_analysis_response():
+                                yield chunk
+                            yield "\n"
+
 
 
 
@@ -854,8 +870,16 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                     try:
                         data = json.loads(line)
                         if "choices" in data and len(data["choices"]) > 0:
-                            delta = data["choices"][0].get("delta", {})
+                            choice = data["choices"][0]
+                            # Try delta first (streaming format)
+                            delta = choice.get("delta", {})
                             chunk = delta.get("content", "")
+
+                            # If no delta content, try message content (non-streaming format)
+                            if not chunk:
+                                message = choice.get("message", {})
+                                chunk = message.get("content", "")
+
                             if chunk:
                                 yield chunk
                     except json.JSONDecodeError:
@@ -973,23 +997,21 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
                     # Terminal management commands
                     if user_input.lower() in ['open terminal', 'open session']:
-                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                        if self.open_terminal_session(session):
+                        if self.rust_executor.open_terminal():
                             print("\033[93m✓ [*] Terminal session opened\033[0m\n")
                         else:
                             print("\033[91m✗ [-] Failed to open terminal session\033[0m\n")
                         continue
 
                     if user_input.lower() == 'reopen terminal':
-                        session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                        if self.reopen_foot_if_needed(session):
+                        if self.rust_executor.open_terminal():
                             print("\033[93m✓ [*] Terminal reopened\033[0m\n")
                         else:
                             print("\033[91m✗ [-] Failed to reopen terminal\033[0m\n")
                         continue
 
                     if user_input.lower() == 'close terminal':
-                        if self.close_foot_window():
+                        if self.rust_executor.close_terminal():
                             print("\033[93m✓ Terminal closed\033[0m\n")
                         else:
                             print("\033[91m✗ Terminal was not running\033[0m\n")
@@ -1002,7 +1024,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         confirm = sys.stdin.readline().strip().lower()
                         if confirm == 'yes':
                             session = os.getenv("ARCHY_TMUX_SESSION", "archy_session")
-                            if self.close_tmux_session(session):
+                            if self.rust_executor.close_session(session):
                                 print("\033[93m✓ [*] Tmux session closed successfully\033[0m\n")
                                 self.reset_state()  # <-- CLEAR THE STATE
                             else:
@@ -1021,7 +1043,7 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
                         continue
 
                     if user_input.lower() == 'sysinfo':
-                        print(f"\033[93m{self.get_system_info()}\033[0m\n")
+                        print(f"\033[93m{self.rust_executor.get_system_info()}\033[0m\n")
                         continue
 
                     if user_input.lower() == 'history':
@@ -1060,18 +1082,24 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
 
 
 def main():
-    if len(sys.argv) > 1:
-        # Single question mode
-        chat = ArchyChat()
-        question = " ".join(sys.argv[1:])
-        print("\033[92mArchy: \033[0m", end="", flush=True)
-        for chunk in chat.send_message(question):
-            print(chunk, end="", flush=True)
-        print()
-    else:
-        # Interactive mode
-        chat = ArchyChat()
-        chat.run_interactive()
+    try:
+        if len(sys.argv) > 1:
+            # Single question mode
+            chat = ArchyChat()
+            question = " ".join(sys.argv[1:])
+            print("\033[92mArchy: \033[0m", end="", flush=True)
+            for chunk in chat.send_message(question):
+                print(chunk, end="", flush=True)
+            print()
+        else:
+            # Interactive mode
+            chat = ArchyChat()
+            chat.run_interactive()
+    except Exception as e:
+        print(f"\033[91m❌ Fatal Error: {e}\033[0m", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
