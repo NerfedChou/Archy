@@ -2,25 +2,45 @@
 Description=Archy Executor Daemon - AI System Assistant
 After=network-online.target
 Wants=network-online.target
-StartLimitInterval=60
-StartLimitBurst=3
 
 [Service]
 Type=simple
 ExecStart=/home/chef/Archy/target/release/archy-executor
-Restart=on-failure
-RestartSec=5
 
+# Auto-restart configuration
+# Restart on any failure or process exit
+Restart=always
+RestartSec=2
 
-# Logging
+# Prevent restart storms - allow 5 restarts within 60 seconds
+StartLimitInterval=60
+StartLimitBurst=5
+StartLimitAction=none
+
+# Resource limits to prevent memory exhaustion
+MemoryMax=512M
+TasksMax=100
+
+# Process management
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+# Logging to systemd journal
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=archy-executor
 
-# Keep the service running
-KillMode=process
+
+# Working directory
+WorkingDirectory=/home/chef/Archy
+
+# Environment variables
+Environment="RUST_LOG=info"
+
 
 [Install]
+# Start at boot (user-level)
 WantedBy=default.target
 
 

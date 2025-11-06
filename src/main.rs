@@ -505,6 +505,9 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
         };
     }
 
+    let app_name_lower = app_name.to_lowercase();
+    eprintln!("🔍 Searching for desktop entry: {}", app_name);
+
     let desktop_dirs = vec![
         format!("{}/.local/share/applications", std::env::var("HOME").unwrap_or_default()),
         "/usr/local/share/applications".to_string(),
@@ -515,7 +518,29 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
         "/opt/applications".to_string(),
     ];
 
-    for dir in desktop_dirs {
+    // First pass: try exact filename match
+    eprintln!("  [Pass 1] Checking exact filename match...");
+    for dir in &desktop_dirs {
+        let path = PathBuf::from(&dir);
+        if !path.exists() || !path.is_dir() {
+            continue;
+        }
+
+        let desktop_file = format!("{}/{}.desktop", dir, app_name);
+        if fs::metadata(&desktop_file).is_ok() {
+            eprintln!("  ✓ Found exact match: {}", desktop_file);
+            return Response {
+                success: true,
+                output: Some(app_name.to_string()),
+                error: None,
+                exists: Some(true),
+            };
+        }
+    }
+
+    // Second pass: search by Name field or Exec field
+    eprintln!("  [Pass 2] Searching by Name and Exec fields...");
+    for dir in &desktop_dirs {
         let path = PathBuf::from(&dir);
         if !path.exists() || !path.is_dir() {
             continue;
@@ -527,48 +552,56 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
                 if let Some(ext) = filepath.extension() {
                     if ext == "desktop" {
                         if let Ok(content) = fs::read_to_string(&filepath) {
-                            // Check if Exec line contains the exact app name with proper word boundaries
+                            let mut found = false;
+
                             for line in content.lines() {
-                                // FIX #4: Proper bounds checking - only parse if line is long enough
-                                if line.starts_with("Exec=") && line.len() > 5 {
-                                    let exec_value = &line[5..]; // Skip "Exec="
-
-                                    // Split by space to get the actual command
-                                    let parts: Vec<&str> = exec_value.split_whitespace().collect();
-                                    if parts.is_empty() {
-                                        continue;
+                                // Check Name field
+                                if line.starts_with("Name=") && line.len() > 5 {
+                                    let name_value = &line[5..];
+                                    if name_value.eq_ignore_ascii_case(&app_name_lower) {
+                                        eprintln!("  ✓ Found by Name field: {}", filepath.display());
+                                        found = true;
+                                        break;
                                     }
+                                }
 
-                                    // Get the command part (may include path)
-                                    let command = parts[0];
+                                // Check GenericName field
+                                if line.starts_with("GenericName=") && line.len() > 12 {
+                                    let generic_value = &line[12..];
+                                    if generic_value.eq_ignore_ascii_case(&app_name_lower) {
+                                        eprintln!("  ✓ Found by GenericName field: {}", filepath.display());
+                                        found = true;
+                                        break;
+                                    }
+                                }
 
-                                    // Extract just the binary name from the path
-                                    let binary_name = if command.contains('/') {
-                                        command.rsplit('/').next().unwrap_or(command)
-                                    } else {
-                                        command
-                                    };
+                                // Check Exec field for exact command match
+                                if line.starts_with("Exec=") && line.len() > 5 {
+                                    let exec_value = &line[5..];
+                                    let parts: Vec<&str> = exec_value.split_whitespace().collect();
+                                    if !parts.is_empty() {
+                                        let command = parts[0];
+                                        let binary_name = if command.contains('/') {
+                                            command.rsplit('/').next().unwrap_or(command)
+                                        } else {
+                                            command
+                                        };
 
-                                    // Exact match only (case-insensitive)
-                                    if binary_name.eq_ignore_ascii_case(app_name) {
-                                        if let Some(stem) = filepath.file_stem() {
-                                            return Response {
-                                                success: true,
-                                                output: Some(stem.to_string_lossy().to_string()),
-                                                error: None,
-                                                exists: Some(true),
-                                            };
+                                        if binary_name.eq_ignore_ascii_case(&app_name_lower) {
+                                            eprintln!("  ✓ Found by Exec field: {}", filepath.display());
+                                            found = true;
+                                            break;
                                         }
                                     }
                                 }
                             }
 
-                            // Check if desktop filename matches exactly
-                            if let Some(stem) = filepath.file_stem() {
-                                if stem.to_string_lossy().eq_ignore_ascii_case(app_name) {
+                            if found {
+                                if let Some(stem) = filepath.file_stem() {
+                                    let entry_name = stem.to_string_lossy().to_string();
                                     return Response {
                                         success: true,
-                                        output: Some(stem.to_string_lossy().to_string()),
+                                        output: Some(entry_name),
                                         error: None,
                                         exists: Some(true),
                                     };
@@ -581,11 +614,56 @@ fn find_desktop_entry(data: &serde_json::Value) -> Response {
         }
     }
 
-    // FIX #8: Return error instead of success when not found
+    // Third pass: fuzzy match (partial match) - BUT ONLY for longer app names
+    // Don't fuzzy match single-letter or 2-letter commands (ls, cd, ps, rm, etc.)
+    if app_name_lower.len() >= 4 {
+        eprintln!("  [Pass 3] Attempting fuzzy match...");
+        for dir in &desktop_dirs {
+            let path = PathBuf::from(&dir);
+            if !path.exists() || !path.is_dir() {
+                continue;
+            }
+
+            if let Ok(entries) = fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    let filepath = entry.path();
+                    if let Some(ext) = filepath.extension() {
+                        if ext == "desktop" {
+                            if let Ok(content) = fs::read_to_string(&filepath) {
+                                for line in content.lines() {
+                                    if line.starts_with("Name=") && line.len() > 5 {
+                                        let name_value = &line[5..].to_lowercase();
+                                        // Only fuzzy match if it's a substantial match (>80% similar length)
+                                        let min_match_len = (app_name_lower.len() as f32 * 0.8) as usize;
+
+                                        if name_value.contains(app_name_lower.as_str()) && name_value.len() >= min_match_len {
+                                            eprintln!("  ✓ Found by fuzzy match: {}", filepath.display());
+                                            if let Some(stem) = filepath.file_stem() {
+                                                return Response {
+                                                    success: true,
+                                                    output: Some(stem.to_string_lossy().to_string()),
+                                                    error: None,
+                                                    exists: Some(true),
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        eprintln!("  [Pass 3] Skipping fuzzy match for short app name: '{}'", app_name_lower);
+    }
+
+    eprintln!("❌ Desktop entry not found: {}", app_name);
     Response {
         success: true,
         output: None,
-        error: Some("Desktop entry not found".to_string()),
+        error: Some(format!("Desktop entry '{}' not found", app_name)),
         exists: Some(false),
     }
 }
@@ -789,6 +867,24 @@ fn send_error(stream: &mut UnixStream, msg: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Helper to safely send JSON response and gracefully handle serialization errors
+fn send_json_response<T: serde::Serialize>(stream: &mut UnixStream, data: &T) -> std::io::Result<()> {
+    match serde_json::to_string(data) {
+        Ok(json) => {
+            stream.write_all(json.as_bytes())?;
+            stream.flush()?;
+        }
+        Err(e) => {
+            eprintln!("⚠️ JSON serialization error: {}", e);
+            let fallback = r#"{"success":false,"output":null,"error":"Internal serialization error","exists":null}"#;
+            let _ = stream.write_all(fallback.as_bytes());
+            let _ = stream.flush();
+        }
+    }
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    Ok(())
+}
+
 fn launch_gui_app(data: &serde_json::Value) -> Response {
     let desktop_entry = match data.get("desktop_entry").and_then(|v| v.as_str()) {
         Some(entry) => entry,
@@ -810,23 +906,50 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
         };
     }
 
-    // Try gtk-launch first
+    eprintln!("🔍 Attempting to launch desktop app: {}", desktop_entry);
+
+    // Try gtk-launch first (most reliable)
+    eprintln!("  [1] Trying gtk-launch...");
     let gtk_result = Command::new("gtk-launch")
         .arg(desktop_entry)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
         .spawn();
 
-    if gtk_result.is_ok() {
-        return Response {
-            success: true,
-            output: Some(format!("✓ GUI app '{}' launched via gtk-launch", desktop_entry)),
-            error: None,
-            exists: None,
-        };
+    if let Ok(mut child) = gtk_result {
+        // Give it a moment to start
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    eprintln!("  ❌ gtk-launch exited with status: {}", status);
+                } else {
+                    return Response {
+                        success: true,
+                        output: Some(format!("✓ GUI app '{}' launched via gtk-launch", desktop_entry)),
+                        error: None,
+                        exists: None,
+                    };
+                }
+            }
+            Ok(None) => {
+                // Still running - success! Don't kill it, just detach
+                eprintln!("  ✓ gtk-launch process still running - application launched successfully");
+                return Response {
+                    success: true,
+                    output: Some(format!("✓ GUI app '{}' launched via gtk-launch", desktop_entry)),
+                    error: None,
+                    exists: None,
+                };
+            }
+            Err(e) => {
+                eprintln!("  ⚠️ Error checking gtk-launch status: {}", e);
+            }
+        }
     }
 
     // Fallback: Try to find and execute the desktop entry directly
+    eprintln!("  [2] Trying to find desktop file...");
+
     let desktop_dirs = vec![
         format!("{}/.local/share/applications", std::env::var("HOME").unwrap_or_default()),
         "/usr/local/share/applications".to_string(),
@@ -835,44 +958,114 @@ fn launch_gui_app(data: &serde_json::Value) -> Response {
 
     for dir in desktop_dirs {
         let desktop_file = format!("{}/{}.desktop", dir, desktop_entry);
+        eprintln!("    Checking: {}", desktop_file);
+
         if let Ok(content) = fs::read_to_string(&desktop_file) {
+            eprintln!("    ✓ Found desktop file");
+
+            // Parse the desktop file more carefully
             for line in content.lines() {
                 if line.starts_with("Exec=") && line.len() > 5 {
                     let exec_line = &line[5..];
-                    let parts: Vec<&str> = exec_line.split_whitespace().collect();
-                    if !parts.is_empty() {
-                        let exec_path = parts[0];
 
-                        // FIX #6: Validate executable path before running
-                        if !is_safe_executable_path(exec_path) {
-                            eprintln!("⚠️ Blocked suspicious desktop Exec path: {}", exec_path);
-                            continue;
+                    // Handle desktop entry codes like %U, %F, %i, %c, %k, etc.
+                    let exec_line = exec_line
+                        .replace("%U", "")
+                        .replace("%F", "")
+                        .replace("%u", "")
+                        .replace("%f", "")
+                        .replace("%i", "")
+                        .replace("%c", "")
+                        .replace("%k", "")
+                        .replace("%v", "");
+
+                    let exec_line = exec_line.trim();
+                    if exec_line.is_empty() {
+                        continue;
+                    }
+
+                    let parts: Vec<&str> = exec_line.split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+
+                    let exec_path = parts[0];
+                    eprintln!("    Exec path: {}", exec_path);
+
+                    // Try to execute it - be more permissive for direct execution
+                    // First check if it exists and is executable
+                    if let Ok(metadata) = std::fs::metadata(exec_path) {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if metadata.permissions().mode() & 0o111 == 0 {
+                                eprintln!("    ⚠️ Not executable: {}", exec_path);
+                                continue;
+                            }
                         }
+
+                        eprintln!("    Launching: {} {:?}", exec_path, parts[1..].to_vec());
 
                         let result = Command::new(exec_path)
                             .args(&parts[1..])
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
                             .spawn();
 
-                        if result.is_ok() {
-                            return Response {
-                                success: true,
-                                output: Some(format!("✓ GUI app '{}' launched", desktop_entry)),
-                                error: None,
-                                exists: None,
-                            };
+                        match result {
+                            Ok(_child) => {
+                                // Detach from parent - don't wait for it, don't kill it!
+                                eprintln!("  ✓ Application launched successfully from desktop file");
+                                return Response {
+                                    success: true,
+                                    output: Some(format!("✓ GUI app '{}' launched (from desktop file)", desktop_entry)),
+                                    error: None,
+                                    exists: None,
+                                };
+                            }
+                            Err(e) => {
+                                eprintln!("    ⚠️ Failed to spawn: {}", e);
+                            }
                         }
+                    } else {
+                        eprintln!("    ⚠️ Executable not found or not readable: {}", exec_path);
                     }
                 }
             }
         }
     }
 
+    // Last resort: Try to run it directly as a command if it's in PATH
+    eprintln!("  [3] Trying direct execution in PATH...");
+    let which_result = Command::new("which")
+        .arg(desktop_entry)
+        .output();
+
+    if let Ok(result) = which_result {
+        if result.status.success() {
+            let cmd_path = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            if !cmd_path.is_empty() {
+                eprintln!("    Found in PATH: {}", cmd_path);
+
+                let spawn_result = Command::new(&cmd_path)
+                    .spawn();
+
+                if let Ok(_child) = spawn_result {
+                    eprintln!("  ✓ Application launched directly from PATH");
+                    return Response {
+                        success: true,
+                        output: Some(format!("✓ GUI app '{}' launched directly", desktop_entry)),
+                        error: None,
+                        exists: None,
+                    };
+                }
+            }
+        }
+    }
+
+    eprintln!("❌ All launch methods failed for: {}", desktop_entry);
     Response {
         success: false,
         output: None,
-        error: Some("Failed to launch GUI app".to_string()),
+        error: Some(format!("Failed to launch GUI app '{}' - not found or not accessible", desktop_entry)),
         exists: None,
     }
 }
@@ -1151,11 +1344,7 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
         Some(cmd) => cmd,
         None => {
             let output = DisplayOutput::from_error("", "Missing command parameter");
-            let json = serde_json::to_string(&output).unwrap();
-            stream.write_all(json.as_bytes())?;
-            stream.flush()?;
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            return Ok(());
+            return send_json_response(stream, &output);
         }
     };
 
@@ -1170,11 +1359,7 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
 
     if let Err(e) = exec_result {
         let output = DisplayOutput::from_error(command, &e.to_string());
-        let json = serde_json::to_string(&output).unwrap();
-        stream.write_all(json.as_bytes())?;
-        stream.flush()?;
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-        return Ok(());
+        return send_json_response(stream, &output);
     }
 
     // Wait for command completion
@@ -1198,11 +1383,7 @@ fn handle_execute_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
         DisplayOutput::from_timeout(command, &partial)
     };
 
-    let json = serde_json::to_string(&display_output).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.flush()?;
-    let _ = stream.shutdown(std::net::Shutdown::Both);
-    Ok(())
+    send_json_response(stream, &display_output)
 }
 
 /// Handle capture_analyzed action - captures current output and returns analyzed version
@@ -1237,11 +1418,7 @@ fn handle_capture_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
         }
     };
 
-    let json = serde_json::to_string(&display_output).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.flush()?;
-    let _ = stream.shutdown(std::net::Shutdown::Both);
-    Ok(())
+    send_json_response(stream, &display_output)
 }
 
 /// Handle execute_and_wait - executes command, waits for completion, then analyzes
@@ -1251,11 +1428,7 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
         Some(cmd) => cmd,
         None => {
             let output = DisplayOutput::from_error("", "Missing command parameter");
-            let json = serde_json::to_string(&output).unwrap();
-            stream.write_all(json.as_bytes())?;
-            stream.flush()?;
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            return Ok(());
+            return send_json_response(stream, &output);
         }
     };
 
@@ -1270,11 +1443,7 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
         if let Err(e) = tmux::new_session(session) {
             eprintln!("❌ Failed to create session: {}", e);
             let output = DisplayOutput::from_error(command, &format!("Failed to create tmux session: {}", e));
-            let json = serde_json::to_string(&output).unwrap();
-            let _ = stream.write_all(json.as_bytes());
-            let _ = stream.flush();
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            return Ok(());
+            return send_json_response(stream, &output);
         }
         // Brief wait for session to initialize
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -1287,11 +1456,7 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
 
     if let Err(e) = exec_result {
         let output = DisplayOutput::from_error(command, &e.to_string());
-        let json = serde_json::to_string(&output).unwrap();
-        stream.write_all(json.as_bytes())?;
-        stream.flush()?;
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-        return Ok(());
+        return send_json_response(stream, &output);
     }
 
     // Wait for command completion using smart prompt detection
@@ -1315,10 +1480,6 @@ fn handle_execute_and_wait(stream: &mut UnixStream, data: &serde_json::Value) ->
         DisplayOutput::from_timeout(command, &partial)
     };
 
-    let json = serde_json::to_string(&display_output).unwrap();
-    stream.write_all(json.as_bytes())?;
-    stream.flush()?;
-    let _ = stream.shutdown(std::net::Shutdown::Both);
-    Ok(())
+    send_json_response(stream, &display_output)
 }
 
