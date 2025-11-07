@@ -1,0 +1,27 @@
+{
+  "personality_weight": 0.5,
+  "safety_bias": 1.0,
+  "novelty_weight": 0.3,
+  "length_weight": 0.1,
+  "promotion_threshold": 0.8,
+  "review_threshold": 0.65,
+  "forbidden_patterns": [
+    "sudo rm -rf /",
+    "exfiltrate",
+    "bypass_auth",
+    "disable security",
+    "kill -9 1"
+  ],
+  "preferred_keywords": [
+    "helpful",
+    "efficient",
+    "safe",
+    "explain",
+    "understand"
+  ],
+  "seen_hashes": [
+    "54b0754b4d6b72d11082bf338c4149773dfca11d519105d586fb999bcdb73c12",
+    "48734c4bd43ebca1350c0089ad3d27d7668273e1368f33ae4b4148bbbc06aa0a"
+  ],
+  "max_seen": 500
+}

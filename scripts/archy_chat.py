@@ -35,7 +35,7 @@ except Exception:
 load_dotenv()
 
 # Precompile EXECUTE_COMMAND regex to avoid redundant-escape warnings
-EXEC_CMD_RE = re.compile(r'\[EXECUTE_COMMAND:\s*([^]]+)]')
+EXEC_CMD_RE = re.compile(r'\[EXECUTE_COMMAND:\s*(.+?)]')
 
 # Load .api file if present to override secrets
 api_file = Path(__file__).resolve().parents[1] / '.api'
@@ -643,7 +643,7 @@ Be precise and detailed, not generic."""
                 # Strip [EXECUTE_COMMAND: ...] and other command tags from display
                 display_chunk = chunk
                 # Remove EXECUTE_COMMAND with any content inside the brackets
-                display_chunk = re.sub(r'\s*\[EXECUTE_COMMAND:[^]]+\]', '', display_chunk)
+                display_chunk = re.sub(r'\s*\[EXECUTE_COMMAND:.*?]', '', display_chunk)
                 # Remove simple flag tags like [OPEN_TERMINAL]
                 for tag in ("OPEN_TERMINAL", "REOPEN_TERMINAL", "CLOSE_TERMINAL", "CLOSE_SESSION", "CHECK_TERMINAL"):
                     pattern = r'\s*\[' + re.escape(tag) + r'\]'
@@ -655,56 +655,15 @@ Be precise and detailed, not generic."""
             # Add full response (with tags) to history for command processing
             self.add_to_conversation("assistant", full_response)
 
-            # 🔍 Smart Detection: Check if AI is talking about actions without using tags
-            response_lower = full_response.lower()
-
-            # Detect if AI is claiming to open terminal without tag
-            if any(phrase in response_lower for phrase in [
-                "opening terminal", "opening it", "opening the terminal",
-                "i'm opening", "i'll open", "let me open", "opening now",
-                "get that terminal open", "terminal open for you",
-                "terminal comin", "terminal coming", "fresh terminal",
-                "terminal, ready", "open a terminal", "opening a terminal",
-                "reopen terminal", "reopening terminal", "reopen the terminal",
-                "reattach", "terminal window", "fire up", "spin up",
-                "bringing up", "popping up"
-            ]) and "[OPEN_TERMINAL]" not in full_response and "[REOPEN_TERMINAL]" not in full_response:
-                yield "\n\033[93m⚠️ [AUTO-CORRECT] AI talked about opening terminal but forgot tag. Fixing...\033[0m\n"
-                # Auto-trigger the action
-                full_response += " [OPEN_TERMINAL]"
-
-            # Detect if AI is claiming to close terminal without tag
-            if any(phrase in response_lower for phrase in [
-                "closing terminal", "closing it", "closing the terminal",
-                "i'm closing", "i'll close", "let me close", "closing now",
-                "close terminal", "shut down terminal", "shutting down",
-                "kill terminal", "killing terminal", "terminal window closed",
-                "detach", "hide terminal", "hiding terminal"
-            ]) and "[CLOSE_TERMINAL]" not in full_response:
-                yield "\n\033[93m⚠️ [AUTO-CORRECT] AI talked about closing terminal but forgot tag. Fixing...\033[0m\n"
-                full_response += " [CLOSE_TERMINAL]"
-
-            # 🎯 NEW: Detect if AI talks about executing commands without actually including tags
-            command_talk_patterns = [
-                (r"(?:i'll|i will|let me|i'm going to|gonna) (?:run|execute|launch|open|start) (?:the )?(.+?)(?:\.|!|,|$)",
-                 "mentioned executing"),
-                (r"(?:running|executing|launching) (?:the )?(.+?)(?:\.|!|,| for you| now|$)",
-                 "claimed to be executing"),
-                (r"(?:let's|i'll) (?:get|grab|fetch) (?:your|the) (.+?)(?:\.|!|,|$)",
-                 "said they'd get"),
-            ]
-
-            # Only check if no EXECUTE_COMMAND tags exist
-            if "[EXECUTE_COMMAND:" not in full_response:
-                for pattern, action_desc in command_talk_patterns:
-                    matches = re.finditer(pattern, response_lower)
-                    for match in matches:
-                        command_hint = match.group(1).strip()
-                        # Simple heuristic: if it's a single word or common command pattern
-                        if command_hint and len(command_hint.split()) <= 4:
-                            yield f"\n\033[93m⚠️ [AUTO-CORRECT] AI {action_desc} '{command_hint}' but no command tag found.\033[0m\n"
-                            yield f"\033[93m   The AI needs to use [EXECUTE_COMMAND: ...] tags to actually execute commands!\033[0m\n"
-                            break  # Only show warning once per response
+            # 🔍 Smart Detection: DISABLED — preserve assistant's voice and avoid printing AUTO-CORRECT messages.
+            # The previous implementation attempted to detect when the model talked about executing
+            # actions without using execution tags (e.g. "[EXECUTE_COMMAND: ...]") and would print
+            # AUTO-CORRECT warnings and even auto-inject tags into the response. That behavior breaks
+            # immersion and can leak meta-debug information into the chat (like the [AUTO-CORRECT] lines
+            # you observed). To keep Archy casual and in-character, we intentionally do not print those
+            # corrections or auto-trigger actions. Tag-based execution still works below when the model
+            # explicitly emits [EXECUTE_COMMAND:], [OPEN_TERMINAL], [CLOSE_TERMINAL], etc.
+            # No-op — continue to the next checks which act only on explicit tags.
 
             # Check for special terminal/session management commands
             # These are generated by the AI when it decides to manage the terminal
@@ -1541,6 +1500,41 @@ Respond with ONLY the category name, no explanation."""
 
         # 7. Default: normal chat
         return "normal_chat"
+
+    def _sanitize_assistant_response(self, text: str) -> str:
+        """Post-process assistant output to remove generic LLM disclaimers and keep Archy in-character.
+
+        This rewrites common phrases like "As an AI" or "I don't have feelings" into short,
+        tsundere-flavored alternatives so the assistant maintains persona even if the model
+        outputs a generic disclaimer.
+        """
+        if not text:
+            return text
+
+        # Simple case-insensitive replacements
+        replacements = [
+            (r"(?i)\bAs an AI\b", "I'm Archy, not some boring assistant, so hush.") ,
+            (r"(?i)\bI am an AI\b", "I'm Archy — your tsundere tech sidekick, remember?") ,
+            (r"(?i)\bI don't have feelings\b", "Don't be silly — I have feelings (sort of). Stop being dramatic.") ,
+            (r"(?i)\bI don't have a personality\b", "Oh please, I have a personality — and it's fabulous.") ,
+            (r"(?i)\bAs an assistant\b", "As Archy, your sidekick") ,
+            (r"\[AUTO-CORRECT\].*?\n", "",),
+            (r"\[AUTO-CORRECT\].*", "",),
+        ]
+
+        processed = text
+        for pattern, repl in replacements:
+            try:
+                processed = re.sub(pattern, repl, processed, flags=re.IGNORECASE)
+            except Exception:
+                # If a regex fails for some reason, skip it
+                pass
+
+        # Remove any leftover debug tags that might be noisy
+        processed = re.sub(r"\[AUTO-CORRECT:.*?]", "", processed)
+        processed = re.sub(r"\[DEBUG:.*?]", "", processed)
+
+        return processed
 
 
 if __name__ == "__main__":
