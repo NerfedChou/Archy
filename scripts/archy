@@ -106,6 +106,18 @@ RUNNING_AS_ROOT=$([[ $EUID -eq 0 ]] && echo "true" || echo "false")
 if ! check_daemon_running; then
     print_warning "Daemon not responding. Starting systemd service..."
 
+    # Import graphical session environment variables into systemd user environment
+    # This ensures the service has access to DISPLAY, WAYLAND_DISPLAY, etc.
+    if [[ -n "$DISPLAY" ]]; then
+        systemctl --user import-environment DISPLAY 2>/dev/null || true
+    fi
+    if [[ -n "$WAYLAND_DISPLAY" ]]; then
+        systemctl --user import-environment WAYLAND_DISPLAY 2>/dev/null || true
+    fi
+    if [[ -n "$XAUTHORITY" ]]; then
+        systemctl --user import-environment XAUTHORITY 2>/dev/null || true
+    fi
+
     # If running as root via sudo, we need to start the user's service session
     if [[ "$RUNNING_AS_ROOT" == "true" && -n "$SUDO_USER" ]]; then
         print_info "Running as root (via sudo), starting service for user: $SUDO_USER"

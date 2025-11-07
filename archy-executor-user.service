@@ -8,7 +8,7 @@ Type=simple
 ExecStart=/home/chef/Archy/target/release/archy-executor
 
 # Import environment from the session (inherits DISPLAY, DBUS, etc.)
-PassEnvironment=DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR
+PassEnvironment=DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR WAYLAND_DISPLAY
 
 # Fallback environment variables if not inherited
 Environment="XAUTHORITY=%h/.Xauthority"
