@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use regex::Regex;
+use crate::errors;  // NEW: Import error detection module
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Importance {
@@ -36,6 +37,8 @@ pub struct ParsedOutput {
     pub findings: Vec<Finding>,
     pub summary: String,
     pub metadata: Metadata,
+    pub status: String,  // NEW: "success", "warning", or "error"
+    pub raw_output: String,  // NEW: Keep original output for Python
 }
 
 /// Detect the format of command output
@@ -96,7 +99,12 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
         format_detected: format.clone(),
     };
 
-    match format.as_str() {
+    // NEW: Detect errors in output
+    let detected_errors = errors::detect_errors(raw);
+    let error_status = errors::determine_status(&detected_errors);
+
+    // Parse based on format
+    let mut parsed = match format.as_str() {
         "nmap" => parse_nmap(raw, metadata),
         "network_table" => parse_network_table(raw, metadata),
         "process_table" => parse_process_table(raw, metadata),
@@ -107,7 +115,37 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
         "journalctl" => parse_journalctl(raw, metadata),
         "json" => parse_json(raw, metadata),
         _ => parse_generic(raw, metadata),
+    };
+
+    // NEW: Add error findings to the parsed output
+    for detected_error in detected_errors {
+        parsed.findings.push(Finding {
+            category: format!("Error: {}", detected_error.pattern),
+            message: detected_error.message,
+            importance: match detected_error.severity {
+                errors::ErrorSeverity::Critical => Importance::Critical,
+                errors::ErrorSeverity::High => Importance::High,
+                errors::ErrorSeverity::Medium => Importance::Medium,
+                errors::ErrorSeverity::Low => Importance::Low,
+            },
+        });
     }
+
+    // NEW: Set status based on error detection
+    parsed.status = error_status;
+
+    parsed
+}
+
+/// Helper to complete ParsedOutput with default status
+fn complete_output(mut output: ParsedOutput, raw: &str) -> ParsedOutput {
+    // Set default status if not already set (will be overridden by error detection)
+    if output.status.is_empty() {
+        output.status = "success".to_string();
+    }
+    // Keep raw output for Python
+    output.raw_output = raw.to_string();
+    output
 }
 
 /// Parse nmap output

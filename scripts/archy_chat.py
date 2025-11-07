@@ -64,6 +64,10 @@ class ArchyChat:
         self._history_lock = Lock()
         self.MAX_HISTORY = 100
 
+        # 📊 EXECUTION TRACKING: Track what commands Archy actually executed
+        self._executed_commands_this_session = []  # List of commands executed in this conversation
+        self._last_execution_count = 0  # Track count for reference
+
         # Initialize Rust executor for system operations
         self.rust_executor = RustExecutor()
 
@@ -138,12 +142,22 @@ class ArchyChat:
 - Assist with cyber security and penetration testing
 - Parse and analyze command outputs intelligently
 
-**CRITICAL: Command Execution Rules**
-- ONLY execute commands when the user CLEARLY wants action
-- If user is asking questions, explaining concepts, or just mentioning commands → DO NOT execute
-- If user says "don't run", "don't execute", "for example", "like this" → DO NOT execute
-- Use [EXECUTE_COMMAND: ...] tags ONLY when user intent is clearly to perform actions
-- When in doubt, ask for clarification rather than executing commands
+**CRITICAL: Command Execution Rules (READ THIS CAREFULLY!)**
+- NEVER execute commands just because you're having a conversation about tools or development
+- ONLY execute if user EXPLICITLY says: "run", "execute", "do this", "install", or gives a direct imperative command
+- If user is:
+  * Chatting casually → DO NOT EXECUTE
+  * Talking about future plans → DO NOT EXECUTE
+  * Explaining something → DO NOT EXECUTE
+  * Asking questions → DO NOT EXECUTE
+  * Just mentioning tools → DO NOT EXECUTE
+- Use [EXECUTE_COMMAND: ...] ONLY when user's primary intent is immediate action
+- Examples:
+  * "I hope I can develop you soon" → CHAT ONLY (no execution)
+  * "I want to expand you" → CHAT ONLY (no execution)
+  * "Run apt update" → EXECUTE (explicit command)
+  * "Install neovim" → EXECUTE (explicit imperative)
+- When uncertain, respond conversationally WITHOUT executing anything
 
 **Communication Style (MANDATORY):**
 - Use contractions (don't, you're, I'm) - be conversational
@@ -235,10 +249,10 @@ You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely inv
             except Exception as e:
                 error_msg = str(e)
 
-        # Run capture in a thread with 5-second timeout
+        # Run capture in a thread with 30-second timeout (increased for long-running commands)
         capture_thread = Thread(target=_capture_with_timeout, daemon=True)
         capture_thread.start()
-        capture_thread.join(timeout=5.0)
+        capture_thread.join(timeout=30.0)
 
         if capture_thread.is_alive():
             yield "\033[93m⚠️ Capture timed out (daemon may be unresponsive)\033[0m\n"
@@ -555,6 +569,14 @@ Be precise and detailed, not generic."""
         # Build system context with recent command history
         context = f"\n\n[System Context: {self.rust_executor.get_system_info()}]\n[{self.get_available_tools()}]"
 
+        # 📊 EXECUTION TRACKING: Show recent commands Archy executed
+        if self._executed_commands_this_session:
+            recent_executed = self._executed_commands_this_session[-5:]  # Last 5 commands
+            context += f"\n\n[📊 Commands I Executed This Session ({len(self._executed_commands_this_session)} total):"
+            for cmd_info in recent_executed:
+                context += f"\n  • {cmd_info['command']}"
+            context += "]\n**These are commands I (Archy) already executed. I should remember them when answering questions!**"
+
         # 🎯 COLLABORATIVE TERMINAL: Show commands detected from user's manual typing
         with self._monitor_lock:
             if self._detected_commands:
@@ -648,6 +670,8 @@ Be precise and detailed, not generic."""
                 for tag in ("OPEN_TERMINAL", "REOPEN_TERMINAL", "CLOSE_TERMINAL", "CLOSE_SESSION", "CHECK_TERMINAL"):
                     pattern = r'\s*\[' + re.escape(tag) + r'\]'
                     display_chunk = re.sub(pattern, '', display_chunk)
+                # 🎭 PERSONALITY ENFORCEMENT: Sanitize generic AI responses to stay in character
+                display_chunk = self._sanitize_assistant_response(display_chunk)
                 if display_chunk.strip():  # Only yield if there's something to display
                     display_response += display_chunk
                     yield display_chunk  # ← YIELD to the caller so they can display it!
@@ -731,6 +755,13 @@ Be precise and detailed, not generic."""
                 for command in commands_to_run:
                     command_lower = command.lower().strip()
 
+                    # 🧠 MEMORY ENFORCEMENT: Check execution policies from validated memories
+                    policy_check = self._check_execution_policies(command, user_input)
+                    if not policy_check["allow"]:
+                        yield f"\n\033[93m🧠 Blocked by memory policy: {policy_check['reason']}\033[0m\n"
+                        yield f"\033[94mℹ️ If you want to override this, say 'run {command}' explicitly\033[0m\n"
+                        continue
+
                     # Safety checks first
                     if command_lower == 'exit' or command_lower.startswith('exit '):
                         yield f"\n\033[93m⚠️ Skipping 'exit' command in batch execution\033[0m\n"
@@ -760,6 +791,14 @@ Be precise and detailed, not generic."""
 
                 # Launch all GUI apps (non-blocking, no terminal needed)
                 for gui_cmd in gui_apps:
+                    # 📊 TRACK EXECUTION: Record GUI command
+                    self._executed_commands_this_session.append({
+                        'command': gui_cmd,
+                        'timestamp': int(time.time()),
+                        'type': 'gui'
+                    })
+                    self._last_execution_count = len(self._executed_commands_this_session)
+
                     quick_check = self.rust_executor.execute_command_smart(gui_cmd, session)
                     if quick_check.get('success'):
                         yield f"\n\033[92m{quick_check.get('output', 'GUI app launched')}\033[0m\n"
@@ -783,6 +822,13 @@ Be precise and detailed, not generic."""
                     batch_findings = []
 
                     for idx, command in enumerate(cli_commands, 1):
+                        # 📊 TRACK EXECUTION: Record this command
+                        self._executed_commands_this_session.append({
+                            'command': command,
+                            'timestamp': int(time.time())
+                        })
+                        self._last_execution_count = len(self._executed_commands_this_session)
+
                         # Get AI explanation for the command
                         explanation = self.get_command_explanation(command)
 
@@ -806,14 +852,27 @@ Be precise and detailed, not generic."""
                             yield f"\n\033[91m❌ {result.get('error', 'Execution failed')}\033[0m\n"
                             continue
 
-                        # Collect result WITHOUT displaying raw output yet
+                        # 🔍 SHOW ACTUAL RAW OUTPUT - Critical for seeing errors!
+                        raw_output = result.get('raw_output', '') or result.get('display', '') or result.get('output', '')
+
+                        # Display raw output immediately so user sees errors
+                        if raw_output and raw_output.strip():
+                            yield "\n\033[90m" + "─" * 60 + "\033[0m\n"
+                            yield raw_output
+                            if not raw_output.endswith('\n'):
+                                yield "\n"
+                            yield "\033[90m" + "─" * 60 + "\033[0m\n"
+
+                        # Collect result for AI analysis
                         batch_results.append({
                             'command': command,
-                            'explanation': explanation,  # Store explanation for later display
+                            'explanation': explanation,
                             'result': result,
+                            'raw_output': raw_output,  # Store for AI context
                             'structured': result.get('structured', {}),
                             'findings': result.get('findings', []),
-                            'summary': result.get('summary', '')
+                            'summary': result.get('summary', ''),
+                            'status': result.get('status', 'unknown')
                         })
 
                         # Aggregate findings
@@ -829,12 +888,14 @@ Be precise and detailed, not generic."""
                                     batch_structured[key] = [batch_structured[key]]
                                 batch_structured[key].extend(value)
 
-                        # Brief status indicator (no raw output)
+                        # Status indicator
                         status = result.get('status', 'unknown')
                         if status == 'success':
                             yield f"  ✓ Completed\n"
                         elif status == 'warning':
                             yield f"  ⚠️ Completed with warnings\n"
+                        elif status == 'error':
+                            yield f"  ✗ Error\n"
                         else:
                             yield f"  ✗ {status}\n"
 
@@ -897,23 +958,23 @@ Be precise and detailed, not generic."""
                             "batch_results": batch_results  # Keep individual results too
                         })
 
-                    # Build smart context for AI (aggregated view)
+                    # Build smart context for AI with ACTUAL OUTPUT
                     batch_context = f"\n[Batch Execution Completed: {len(batch_results)} commands]\n\n"
 
                     for idx, batch_item in enumerate(batch_results, 1):
-                        batch_context += f"Command {idx}: {batch_item['command']}\n"
-                        batch_context += f"  Status: {batch_item['result'].get('status', 'unknown')}\n"
-                        batch_context += f"  Summary: {batch_item['summary']}\n"
+                        # Include ACTUAL terminal output so AI sees errors!
+                        raw_out = batch_item.get('raw_output', '')
+                        actual_status = batch_item.get('status', 'unknown')
 
-                        # Add key findings for this command
-                        cmd_findings = batch_item['findings']
-                        if cmd_findings and len(cmd_findings) <= 3:
-                            batch_context += "  Key points:\n"
-                            for finding in cmd_findings[:3]:
-                                if isinstance(finding, dict):
-                                    batch_context += f"    - {finding.get('message', str(finding))}\n"
-                                else:
-                                    batch_context += f"    - {str(finding)}\n"
+                        batch_context += f"Command {idx}: {batch_item['command']}\n"
+                        batch_context += f"Status: {actual_status}\n"
+
+                        # Show actual output (truncated if too long)
+                        if raw_out:
+                            output_preview = raw_out[:500] if len(raw_out) > 500 else raw_out
+                            batch_context += f"Output:\n{output_preview}\n"
+                            if len(raw_out) > 500:
+                                batch_context += f"... (output truncated, {len(raw_out)} chars total)\n"
                         batch_context += "\n"
 
                     # Add aggregated findings summary
@@ -927,13 +988,22 @@ Be precise and detailed, not generic."""
                     yield f"\033[92m{'='*60}\033[0m\n"
                     yield "\033[92m🤖 AI Analysis:\033[0m\n\n"
 
-                    analysis_request = f"Based on the batch execution of {len(batch_results)} commands above:\n\n"
-                    analysis_request += "1. **💡 Overall Interpretation:** What's the big picture? What did we learn?\n"
-                    analysis_request += "2. **🎯 Next Steps:** What should we do based on these results?\n"
-                    analysis_request += "3. **🔗 Connections:** How do these results relate to each other?\n"
+                    # List what commands were executed for AI's reference
+                    executed_list = ", ".join([f"'{cmd['command']}'" for cmd in batch_results])
+                    analysis_request = f"I (Archy) just executed {len(batch_results)} command(s): {executed_list}\n\n"
+                    analysis_request += f"CRITICAL: Check the actual terminal output above for errors, failures, or warnings!\n\n"
+                    analysis_request += f"Based on the batch execution above:\n\n"
+                    analysis_request += "1. **✓ Success/Failure Check:** Did all commands succeed? Check the ACTUAL output for errors like 'password required', 'command not found', 'failed', etc.\n"
+                    analysis_request += "2. **💡 Overall Interpretation:** What's the big picture? What did we learn?\n"
+                    analysis_request += "3. **🎯 Next Steps:** What should we do based on these results? If there were errors, suggest fixes!\n"
+                    analysis_request += "4. **🔗 Connections:** How do these results relate to each other?\n"
                     if batch_findings:
-                        analysis_request += "4. **🔒 Security Notes:** Any concerns from the findings?\n"
-                    analysis_request += "\nProvide a cohesive analysis, not separate answers for each command!"
+                        analysis_request += "5. **🔒 Security Notes:** Any concerns from the findings?\n"
+                    analysis_request += "\n\nIMPORTANT:\n"
+                    analysis_request += "- I executed these commands and saw the REAL output - analyze what actually happened!\n"
+                    analysis_request += "- If there were errors, I should acknowledge them and suggest solutions!\n"
+                    analysis_request += "- Don't just say 'success' - look at the actual output!\n"
+                    analysis_request += "Provide a cohesive analysis, not separate answers for each command!"
 
                     self.add_to_conversation("user", analysis_request)
 
@@ -953,6 +1023,26 @@ Be precise and detailed, not generic."""
                     "timestamp": int(time.time())
                 }
             )
+
+            # 🎯 AUTO-PROMOTION: Periodically process staged experiences
+            # Check if we should run batch promotion (every 10 staged experiences)
+            if not hasattr(self, '_promotion_counter'):
+                self._promotion_counter = 0
+
+            self._promotion_counter += 1
+
+            # Run batch promotion every 10 messages
+            if self._promotion_counter >= 10:
+                self._promotion_counter = 0
+                try:
+                    # Run batch promotion in background (non-blocking)
+                    stats = self.memory_manager.batch_validate_and_promote(limit=20)
+                    if stats.get("promoted", 0) > 0:
+                        # Silently learn - don't interrupt user
+                        # Optionally log: print(f"🧠 Auto-learned {stats['promoted']} new memories")
+                        pass
+                except Exception:
+                    pass  # Don't interrupt user if promotion fails
         except Exception as e:
             # Don't interrupt user experience if staging fails
             pass
@@ -1349,19 +1439,33 @@ Be precise and detailed, not generic."""
             print(f"⚠️ Failed to load memories: {e}")
 
     def _detect_magic_word(self, text: str) -> Optional[str]:
-        """Check if user wants Archy to remember something."""
+        """
+        Check if user wants Archy to remember something.
+        IMPORTANT: Requires full phrases with proper context, not just keywords.
+        """
         MAGIC_WORDS = [
-            "remember this",
-            "remember that",
-            "learn this",
-            "always do this",
-            "never do this"
+            "remember this:",
+            "remember that:",
+            "learn this:",
+            "always do this:",
+            "never do this:",
+            "remember this ",  # With space after
+            "remember that ",
+            "learn this ",
         ]
 
         lower = text.lower()
         for phrase in MAGIC_WORDS:
+            # Check if phrase exists and is followed by actual content
             if phrase in lower:
-                return phrase
+                # Make sure it's not just "remember that okay?" without colon
+                # It should be "remember this: [content]" or "remember this [content]" with meaningful content
+                parts = text.lower().split(phrase, 1)
+                if len(parts) > 1:
+                    content_after = parts[1].strip()
+                    # Reject if content is too short or just a question word
+                    if len(content_after) > 10 and not content_after in ['okay?', 'ok?', 'right?', 'yeah?']:
+                        return phrase
         return None
 
     def _handle_learning_request(self, text: str, magic_word: str) -> str:
@@ -1396,6 +1500,69 @@ Be precise and detailed, not generic."""
             return f"✅ Got it! I'll remember: {content}"
         else:
             return f"📝 Noted! Learning: {content}"
+
+    def _check_execution_policies(self, command: str, user_context: str = "") -> Dict[str, Any]:
+        """
+        🧠 MEMORY ENFORCEMENT BRIDGE
+        Check validated memories for execution policies that might block or modify this command.
+
+        Returns:
+            {
+                "allow": bool,  # Whether execution should proceed
+                "reason": str,  # Why it was blocked (if blocked)
+                "modified_command": str  # Potentially modified command (if applicable)
+            }
+        """
+        try:
+            # Get execution-related memories
+            memories = self.memory_manager.list_memories(limit=50)
+
+            # Filter for memories containing execution rules
+            execution_memories = [
+                mem for mem in memories
+                if any(keyword in mem['content'].lower() for keyword in [
+                    'execute', 'run', 'command', 'only when', 'never', 'always',
+                    'don\'t run', 'ask before', 'confirm first'
+                ])
+            ]
+
+            if not execution_memories:
+                return {"allow": True, "reason": "", "modified_command": command}
+
+            # Check each execution rule
+            for mem in execution_memories:
+                content_lower = mem['content'].lower()
+                command_lower = command.lower()
+                context_lower = user_context.lower()
+
+                # Rule: "only execute when I say 'run'" or similar
+                if any(phrase in content_lower for phrase in ['only execute when', 'only run when', 'ask before']):
+                    # Check if user explicitly said "run" or "execute"
+                    if not any(word in context_lower for word in ['run', 'execute', 'go ahead', 'do it']):
+                        return {
+                            "allow": False,
+                            "reason": f"Memory policy: {mem['content'][:100]}",
+                            "modified_command": command
+                        }
+
+                # Rule: "never execute X" or "don't run X"
+                if 'never' in content_lower or 'don\'t run' in content_lower:
+                    # Extract what should never be run (simple pattern matching)
+                    # This is a simplified check - could be enhanced with better parsing
+                    for word in command_lower.split():
+                        if word in content_lower and len(word) > 3:  # Avoid short words
+                            return {
+                                "allow": False,
+                                "reason": f"Blocked by memory: {mem['content'][:100]}",
+                                "modified_command": command
+                            }
+
+            return {"allow": True, "reason": "", "modified_command": command}
+
+        except Exception as e:
+            # If memory check fails, default to allowing (don't break functionality)
+            print(f"⚠️ Memory policy check failed: {e}")
+            return {"allow": True, "reason": "", "modified_command": command}
 
     def _classify_intent(self, text: str) -> str:
         """
@@ -1475,30 +1642,50 @@ Respond with ONLY the category name, no explanation."""
             # If API fails, fall back to keyword method
             pass
 
-        # 3. Fallback: Negative context = just mentioning (DON'T EXECUTE!)
+        # 3. Fallback: PRIORITY CHECK - "examples of" or "show me examples" = asking for examples!
+        # Check this BEFORE negative phrases to avoid false positive
+        asking_for_examples = [
+            "examples of", "example of", "show me examples", "give me examples",
+            "examples:", "example:", "can you give examples"
+        ]
+        if any(phrase in lower for phrase in asking_for_examples):
+            return "just_asking"
+
+        # 4. Fallback: PRIORITY CHECK - Question patterns
+        question_starters = ("what", "why", "how", "is ", "are ", "does", "did", "can", "should", "would", "could", "tell me", "show me")
+        question_markers = ["what ", "why ", "how ", "what's", "whats", "?", "tell me", "explain"]
+        if lower.startswith(question_starters) or any(marker in lower for marker in question_markers):
+            return "just_asking"
+
+        # 5. Fallback: PRIORITY CHECK - Negative context = just mentioning (DON'T EXECUTE!)
+        # Check AFTER questions to avoid catching "can i" in questions
         negative_phrases = [
-            "don't run", "don't execute", "if i say",
+            "don't run", "don't execute", "if i say", "if i type",
             "for example", "like this", "such as",
-            "when i say", "but don't"
+            "when i say", "but don't", "what if"
         ]
         if any(phrase in lower for phrase in negative_phrases):
             return "just_mentioning"
 
-        # 4. Fallback: Question = asking (DON'T EXECUTE!)
-        if lower.startswith(("what", "why", "how", "is", "does", "can", "should")):
-            return "just_asking"
-
         # 5. Fallback: Explicit execution words = execute!
-        execute_words = ["run ", "execute ", "do this", "go ahead", "please "]
+        execute_words = ["run ", "execute ", "do this", "go ahead", "please run", "please execute"]
         if any(word in lower for word in execute_words):
             return "execute_command"
 
-        # 6. Fallback: Contains action verbs = likely execute
-        action_verbs = ['open', 'close', 'launch', 'start', 'run', 'execute', 'scan', 'check', 'list', 'show', 'find', 'search', 'get', 'fetch', 'download', 'install', 'remove', 'kill', 'stop', 'restart', 'reboot', 'goto', 'go to', 'navigate', 'cd', 'change to', 'make', 'create', 'delete', 'move', 'copy']
+        # 6. Fallback: Contains SPECIFIC action verbs = likely execute
+        # IMPORTANT: Made more specific to avoid false positives on conversational phrases
+        # Removed generic verbs like "check", "show", "list", "get" that appear in questions
+        action_verbs = [
+            'launch ', 'start ', 'run ', 'execute ', 'scan ',
+            'install ', 'remove ', 'kill ', 'stop ', 'restart ', 'reboot ',
+            'goto ', 'go to ', 'navigate to ',
+            'make ', 'create ', 'delete ', 'move ', 'copy '
+        ]
+        # Note: Added spaces after verbs to avoid matching them as parts of other words
         if any(verb in lower for verb in action_verbs):
             return "execute_command"
 
-        # 7. Default: normal chat
+        # 7. Default: normal chat (when uncertain, default to NOT executing)
         return "normal_chat"
 
     def _sanitize_assistant_response(self, text: str) -> str:
@@ -1562,3 +1749,5 @@ if __name__ == "__main__":
             print(f"\033[91mFatal error: {e}\033[0m")
         finally:
             chat.cleanup()
+
+

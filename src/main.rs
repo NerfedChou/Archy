@@ -14,6 +14,7 @@ mod config;
 mod helpers;
 mod tmux;
 mod batch;
+mod errors;  // NEW: Error detection module
 
 use output::DisplayOutput;
 use config::Config;
