@@ -1,7 +1,3 @@
-"""
-BiasManager - Controls learning thresholds, safety rules, and scoring weights
-This is the cognitive bias system that guides what the AI learns and remembers.
-"""
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
@@ -105,7 +101,7 @@ class BiasManager:
             "score": 0.0..1.0,
             "verdict": "reject" | "needs_review" | "accept_candidate",
             "breakdown": {...},
-            "safety_issues": [...]
+            "safety_issues": []
         }
         """
         metadata = metadata or {}
@@ -191,4 +187,3 @@ class BiasManager:
         if extras.get("tone"):
             hint += f" [TONE: {extras['tone']}]"
         return prompt_template + hint
-

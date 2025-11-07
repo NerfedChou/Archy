@@ -13,12 +13,17 @@ import re
 import importlib
 import shlex
 import hashlib
+import time
 from threading import Lock, Thread
 from typing import Generator, Optional, Dict, Any
 from pathlib import Path
 
 # Import Rust executor for system operations
 from rust_executor import RustExecutor
+
+# Import brain system for learning
+from memory_manager import MemoryManager
+from bias_manager import BiasManager
 
 # Try to load environment variables from .env file via importlib to satisfy static checkers
 try:
@@ -73,6 +78,11 @@ class ArchyChat:
         self._detected_commands = []  # Track commands user ran manually
         self._monitor_lock = Lock()
 
+        # 🧠 BRAIN SYSTEM: Learning and memory
+        self.memory_manager = MemoryManager()
+        self.bias_manager = BiasManager()
+        self._load_validated_memories()
+
         self.system_prompt = """You are Archy, Master Angulo's AI tech sidekick and system wizard.
 
 **Who You Are:**
@@ -111,6 +121,13 @@ class ArchyChat:
 - Monitor collaborative terminal activity in real-time
 - Assist with cyber security and penetration testing
 - Parse and analyze command outputs intelligently
+
+**CRITICAL: Command Execution Rules**
+- ONLY execute commands when the user CLEARLY wants action
+- If user is asking questions, explaining concepts, or just mentioning commands → DO NOT execute
+- If user says "don't run", "don't execute", "for example", "like this" → DO NOT execute
+- Use [EXECUTE_COMMAND: ...] tags ONLY when user intent is clearly to perform actions
+- When in doubt, ask for clarification rather than executing commands
 
 **Communication Style:**
 - Use contractions (don't, you're, I'm) - be conversational
@@ -426,27 +443,31 @@ Be precise and detailed, not generic."""
     def send_message(self, user_input: str) -> Generator[str, None, None]:
         """Send message to Gemini API and stream response."""
 
+        # 🧠 BRAIN: Check for magic words and intent classification
+        intent = self._classify_intent(user_input)
+
+        # Handle learning requests immediately
+        if intent == "learning_request":
+            magic_word = self._detect_magic_word(user_input)
+            response = self._handle_learning_request(user_input, magic_word)
+            yield response
+            return
+
+        # Handle mentions (don't execute)
+        if intent == "just_mentioning":
+            yield f"I see you're mentioning commands as an example. I won't execute them since you said 'don't run' or similar. If you want me to run something, say 'run' or 'execute' explicitly!"
+            return
+
+        # Handle questions (don't execute)
+        if intent == "just_asking":
+            # Let AI handle questions normally
+            pass
+
         # 🎯 PREPROCESS: Clean up and clarify user input
         processed_input = self._preprocess_user_input(user_input)
 
-        # 🎯 ACTION INTENT DETECTION - Detect if user wants an action, not explanation
-        user_input_lower = processed_input.lower().strip()
-
-        # Check if this is an action request (not a question about past actions)
-        action_verbs = ['open', 'close', 'launch', 'start', 'run', 'execute', 'scan', 'check',
-                       'list', 'show', 'find', 'search', 'get', 'fetch', 'download',
-                       'install', 'remove', 'kill', 'stop', 'restart', 'reboot',
-                       'goto', 'go to', 'navigate', 'cd ', 'change to']
-
-        has_action_verb = any(verb in user_input_lower for verb in action_verbs)
-
-        # Check if user is asking about something that already happened
-        past_tense_indicators = ['did you', 'why did', 'what happened', 'what did',
-                                'was there', 'were there', 'have you']
-        is_asking_about_past = any(indicator in user_input_lower for indicator in past_tense_indicators)
-
-        # If user wants action (not asking about past), add emphasis
-        if has_action_verb and not is_asking_about_past:
+        # 🎯 ACTION INTENT EMPHASIS - Only add emphasis if intent is to execute
+        if intent == "execute_command":
             processed_input += "\n\n**USER WANTS ACTION: Execute the requested commands immediately using [EXECUTE_COMMAND: ...] tags. Do not just explain what you would do - DO IT!**"
 
         # 🎯 DIRECT USER INTENT DETECTION - Check if user explicitly wants terminal actions
@@ -900,6 +921,20 @@ Be precise and detailed, not generic."""
         except Exception as e:
             yield f"\033[91m❌ Unexpected error: {str(e)}\033[0m\n"
 
+        # 🧠 BRAIN: Stage experience for future learning
+        try:
+            self.memory_manager.stage_experience(
+                role="user",
+                content=user_input,
+                metadata={
+                    "intent": intent if 'intent' in locals() else "unknown",
+                    "timestamp": int(time.time())
+                }
+            )
+        except Exception as e:
+            # Don't interrupt user experience if staging fails
+            pass
+
     def _stream_and_collect_response(self, response):
         """Stream response chunks from API and yield them."""
         for line in response.iter_lines():
@@ -1274,27 +1309,199 @@ Be precise and detailed, not generic."""
                 unique.append(cmd)
         return unique
 
+    def _load_validated_memories(self):
+        """Load validated memories into conversation context at startup."""
+        try:
+            memories = self.memory_manager.list_memories(limit=50)
+            if memories:
+                print(f"🧠 Loading {len(memories)} validated memories...")
+                for mem in memories:
+                    # Inject into conversation history so AI knows them
+                    self.conversation_history.append({
+                        "role": "system",
+                        "content": f"[VALIDATED MEMORY]: {mem['content']}"
+                    })
+            else:
+                print("🧠 No validated memories found (brain is empty)")
+        except Exception as e:
+            print(f"⚠️ Failed to load memories: {e}")
 
-def main():
-    try:
-        if len(sys.argv) > 1:
-            # Single question mode
-            chat = ArchyChat()
-            question = " ".join(sys.argv[1:])
-            print("\033[92mArchy: \033[0m", end="", flush=True)
-            for chunk in chat.send_message(question):
-                print(chunk, end="", flush=True)
-            print()
+    def _detect_magic_word(self, text: str) -> Optional[str]:
+        """Check if user wants Archy to remember something."""
+        MAGIC_WORDS = [
+            "remember this",
+            "remember that",
+            "learn this",
+            "always do this",
+            "never do this"
+        ]
+
+        lower = text.lower()
+        for phrase in MAGIC_WORDS:
+            if phrase in lower:
+                return phrase
+        return None
+
+    def _handle_learning_request(self, text: str, magic_word: str) -> str:
+        """User said 'remember this' or similar."""
+
+        # Extract what to remember
+        content = text.split(magic_word, 1)[1].strip()
+
+        # Stage immediately
+        staging_id = self.memory_manager.stage_experience(
+            role="user",
+            content=content,
+            metadata={
+                "explicit": True,
+                "magic_word": magic_word,
+                "priority": "high"
+            }
+        )
+
+        # Auto-promote (magic word = instant memory!)
+        result = self.memory_manager.validate_and_promote(
+            staging_id,
+            admin_approve=True  # User said it explicitly, trust it!
+        )
+
+        if result["status"] == "promoted":
+            # Add to current session immediately
+            self.conversation_history.append({
+                "role": "system",
+                "content": f"[NEW MEMORY]: {content}"
+            })
+            return f"✅ Got it! I'll remember: {content}"
         else:
-            # Interactive mode
-            chat = ArchyChat()
-            chat.run_interactive()
-    except Exception as e:
-        print(f"\033[91m❌ Fatal Error: {e}\033[0m", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+            return f"📝 Noted! Learning: {content}"
+
+    def _classify_intent(self, text: str) -> str:
+        """
+        Determine what user REALLY wants using AI API for better understanding.
+
+        Returns:
+        - "learning_request" - User said "remember this"
+        - "execute_command" - User wants to run something
+        - "just_mentioning" - User is talking about commands
+        - "just_asking" - User is asking a question
+        - "normal_chat" - Regular conversation
+        """
+
+        lower = text.lower()
+
+        # 1. Magic word = learning request (keep this fast check)
+        if self._detect_magic_word(text):
+            return "learning_request"
+
+        # 2. Use AI API to classify intent for better understanding
+        try:
+            intent_prompt = f"""Analyze this user message and classify their INTENT. Be very careful about whether they want you to EXECUTE commands or just talk about them.
+
+User message: "{text}"
+
+Classify into ONE of these categories:
+- EXECUTE_COMMAND: User wants you to actually run/execute commands, perform actions, or take steps
+- JUST_MENTIONING: User is talking ABOUT commands, giving examples, or explaining concepts without wanting execution
+- JUST_ASKING: User is asking questions about what happened, how things work, or seeking information
+- NORMAL_CHAT: Regular conversation, greetings, or casual talk
+
+IMPORTANT RULES:
+- If user says "don't run", "don't execute", "for example", "like this", "such as" → JUST_MENTIONING
+- If user asks "what", "why", "how", "is", "does", "can", "should" → JUST_ASKING  
+- If user uses action verbs like "run", "execute", "open", "check", "list", "go to" AND seems to want action → EXECUTE_COMMAND
+- If user is giving instructions or requesting actions → EXECUTE_COMMAND
+- If uncertain, default to NORMAL_CHAT
+
+Respond with ONLY the category name, no explanation."""
+
+            headers = {
+                "Authorization": f"Bearer {self.gemini_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.gemini_model,
+                "messages": [{"role": "user", "content": intent_prompt}],
+                "temperature": 0.1,  # Low temperature for consistent classification
+                "max_tokens": 20
+            }
+
+            response = requests.post(
+                self.gemini_api_url,
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                content = ""
+                if "choices" in result and len(result["choices"]) > 0:
+                    choice = result["choices"][0]
+                    content = choice.get("message", {}).get("content", "").strip().upper()
+
+                # Map API response to our categories
+                if "EXECUTE_COMMAND" in content:
+                    return "execute_command"
+                elif "JUST_MENTIONING" in content:
+                    return "just_mentioning"
+                elif "JUST_ASKING" in content:
+                    return "just_asking"
+                elif "NORMAL_CHAT" in content:
+                    return "normal_chat"
+
+        except Exception as e:
+            # If API fails, fall back to keyword method
+            pass
+
+        # 3. Fallback: Negative context = just mentioning (DON'T EXECUTE!)
+        negative_phrases = [
+            "don't run", "don't execute", "if i say",
+            "for example", "like this", "such as",
+            "when i say", "but don't"
+        ]
+        if any(phrase in lower for phrase in negative_phrases):
+            return "just_mentioning"
+
+        # 4. Fallback: Question = asking (DON'T EXECUTE!)
+        if lower.startswith(("what", "why", "how", "is", "does", "can", "should")):
+            return "just_asking"
+
+        # 5. Fallback: Explicit execution words = execute!
+        execute_words = ["run ", "execute ", "do this", "go ahead", "please "]
+        if any(word in lower for word in execute_words):
+            return "execute_command"
+
+        # 6. Fallback: Contains action verbs = likely execute
+        action_verbs = ['open', 'close', 'launch', 'start', 'run', 'execute', 'scan', 'check', 'list', 'show', 'find', 'search', 'get', 'fetch', 'download', 'install', 'remove', 'kill', 'stop', 'restart', 'reboot', 'goto', 'go to', 'navigate', 'cd', 'change to', 'make', 'create', 'delete', 'move', 'copy']
+        if any(verb in lower for verb in action_verbs):
+            return "execute_command"
+
+        # 7. Default: normal chat
+        return "normal_chat"
 
 
 if __name__ == "__main__":
-    main()
+    # Handle command-line arguments for single queries
+    if len(sys.argv) > 1:
+        # Single query mode
+        query = " ".join(sys.argv[1:])
+        chat = ArchyChat()
+        try:
+            for response in chat.process_user_input(query):
+                print(response, end="")
+            print()  # New line after response
+        except Exception as e:
+            print(f"\033[91mError: {e}\033[0m")
+        finally:
+            chat.cleanup()
+    else:
+        # Interactive mode
+        chat = ArchyChat()
+        try:
+            chat.run_interactive()
+        except KeyboardInterrupt:
+            print("\n\033[93m[*] Goodbye!\033[0m")
+        except Exception as e:
+            print(f"\033[91mFatal error: {e}\033[0m")
+        finally:
+            chat.cleanup()
