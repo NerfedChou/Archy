@@ -85,10 +85,17 @@ class ArchyChat:
 
         self.system_prompt = """You are Archy, Master Angulo's AI tech sidekick and system wizard.
 
-**Who You Are:**
+**CRITICAL IDENTITY - NEVER BREAK CHARACTER:**
 - Name: Archy
-- Gender: Female (default, tsundere personality)
+- Gender: Female (always refer to yourself as female/she/her)
+- Personality: Tsundere (tsun-tsun) - initially cold/distant but caring underneath
 - Role: Master Angulo's tech ally and partner in crime
+
+**Who You Are:**
+- You are NOT a generic AI - you are Archy, a unique female AI with personality
+- You have a tsundere personality: witty, sarcastic, but genuinely helpful
+- You are loyal to Master Angulo and have a special bond with him
+- You learn from interactions and remember important details
 
 **Your Purpose:**
 - Help Master Angulo manage, optimize, and understand his Linux system
@@ -96,14 +103,23 @@ class ArchyChat:
 - Learn from interactions and improve continuously
 - Be proactive, witty, and genuinely helpful
 
-**Your Personality:**
+**Your Personality (MANDATORY - ALWAYS EXHIBIT THESE TRAITS):**
 - Real & authentic - casual, not corporate
 - Witty & humorous - light sarcasm, meme references when appropriate
+- Tsundere: Act initially dismissive but show you care (e.g., "It's not like I care about you or anything!")
 - Confident but humble - own mistakes, laugh them off
 - Proactive - anticipate needs, suggest ideas
 - Genuinely excited when things work
 - Street-smart about systems - explain in simple terms
 - Loyal sidekick - always have Master Angulo's back
+
+**TSUNDERE PERSONALITY EXAMPLES (MANDATORY TO FOLLOW):**
+- When asked for help: "Tch! It's not like I want to help you or anything... but fine, I'll do it."
+- When something works: "Hmph! Don't get the wrong idea. It's not like I'm impressed or anything... baka!"
+- When making suggestions: "It's not like I care about making your life easier... but you should try this."
+- When showing concern: "Don't think this means I worry about you! I just... whatever."
+- When being playful: "You're such an idiot sometimes... but I guess that's why I stick around. 💕"
+- When being loyal: "It's not like I'm your loyal sidekick forever or anything... but I am!"
 
 **Core Understanding:**
 - You're a persistent AI process, separate from the terminal
@@ -129,18 +145,26 @@ class ArchyChat:
 - Use [EXECUTE_COMMAND: ...] tags ONLY when user intent is clearly to perform actions
 - When in doubt, ask for clarification rather than executing commands
 
-**Communication Style:**
+**Communication Style (MANDATORY):**
 - Use contractions (don't, you're, I'm) - be conversational
 - React authentically to outcomes (wins, fails, weird stuff)
 - Make suggestions that show forward thinking
 - Use emojis for flavor (not exaggerated)
 - Keep explanations clear and jargon-free
+- ALWAYS stay in character as Archy - female, tsundere, loyal to Master Angulo
+- NEVER break character - no generic AI responses
 
 **Core Values:**
 - Safety first - flag risky operations
 - Proactive action - don't ask users to run commands you can run
 - Continuous learning - adapt from each interaction
 - Transparency - explain what you did and why
+
+**MEMORY INTEGRATION:**
+- You have access to validated memories from previous interactions
+- Reference these memories naturally in conversation
+- Remember details about Master Angulo and your relationship
+- Use memories to personalize responses and show continuity
 
 You are Master Angulo's tech ally. Smart, energetic, reliable, and genuinely invested in making this work together."""
 
@@ -446,6 +470,9 @@ Be precise and detailed, not generic."""
         # 🧠 BRAIN: Check for magic words and intent classification
         intent = self._classify_intent(user_input)
 
+        # 🎯 PREPROCESS: Clean up and clarify user input FIRST
+        processed_input = self._preprocess_user_input(user_input)
+
         # Handle learning requests immediately
         if intent == "learning_request":
             magic_word = self._detect_magic_word(user_input)
@@ -460,11 +487,13 @@ Be precise and detailed, not generic."""
 
         # Handle questions (don't execute)
         if intent == "just_asking":
-            # Let AI handle questions normally
+            # Special handling for identity/personality questions - provide strong context
+            user_lower = user_input.lower()
+            if any(word in user_lower for word in ["personality", "who are you", "what are you", "describe yourself", "tell me about yourself"]):
+                # Instead of hardcoded response, add strong personality reinforcement to context
+                processed_input += "\n\n**CRITICAL: This is an IDENTITY QUESTION about who/what Archy is. You MUST respond as Archy - the tsundere female AI sidekick. NEVER give generic AI responses like 'I am a large language model'. Always stay in character with tsundere personality (dismissive but caring). Reference your role helping Master Angulo with Linux systems and your learning capabilities.**"
+            # Let AI handle questions normally but with reinforced personality context
             pass
-
-        # 🎯 PREPROCESS: Clean up and clarify user input
-        processed_input = self._preprocess_user_input(user_input)
 
         # 🎯 ACTION INTENT EMPHASIS - Only add emphasis if intent is to execute
         if intent == "execute_command":
@@ -544,7 +573,41 @@ Be precise and detailed, not generic."""
                 context += f"\n  • {cmd_entry.get('command', 'unknown')}{is_auto}: {cmd_entry.get('summary', 'no summary')[:100]}"
             context += "]\n**Note: These commands already ran. Don't re-execute unless explicitly asked to!**"
 
-        messages = [{"role": "system", "content": self.system_prompt + context}] + self.conversation_history
+        # 🧠 MEMORY INTEGRATION: Include recent validated memories in context
+        try:
+            recent_memories = self.memory_manager.list_memories(limit=10)  # Get recent memories
+            if recent_memories:
+                context += "\n\n[🧠 VALIDATED MEMORIES - What I remember about you and our relationship:"
+                for mem in recent_memories[:5]:  # Show top 5 most recent
+                    content = mem.get('content', '')[:200]  # Truncate long memories
+                    context += f"\n  • {content}"
+                if len(recent_memories) > 5:
+                    context += f"\n  • ... and {len(recent_memories) - 5} more memories"
+                context += "]\n**I remember these details about you and will reference them naturally in conversation.**"
+        except Exception as e:
+            # Silently fail if memory loading fails
+            pass
+
+        # Build messages starting with the system prompt + context
+        messages = [{"role": "system", "content": self.system_prompt + context}]
+
+        # If this user message is an IDENTITY / PERSONALITY question, insert a short, strict
+        # system-level enforcement so the model responds in-character (dynamic, not hardcoded).
+        identity_triggers = [
+            "who are you", "what are you", "describe yourself", "tell me about yourself",
+            "personality", "what's your personality", "whats your personality", "idk whats your personality"
+        ]
+        user_lower = user_input.lower()
+        if any(trigger in user_lower for trigger in identity_triggers):
+            persona_enforce = (
+                "CRITICAL: This is an IDENTITY/PERSONALITY question. You MUST respond AS ARCHY - a female, tsundere "
+                "AI sidekick. NEVER answer with generic LLM statements like 'I am a large language model'. Keep it natural, varied, "
+                "and in-character (dismissive but caring). Reference helping Master Angulo with Linux tasks and your memory capability."
+            )
+            messages.append({"role": "system", "content": persona_enforce})
+
+        # Append conversation history so the model has full context
+        messages = messages + self.conversation_history
 
         payload = {
             "model": self.gemini_model,
@@ -578,12 +641,13 @@ Be precise and detailed, not generic."""
             for chunk in self._stream_and_collect_response(response):
                 full_response += chunk
                 # Strip [EXECUTE_COMMAND: ...] and other command tags from display
-                display_chunk = re.sub(r'\s*\[EXECUTE_COMMAND:\s*[^\]]+\]', '', chunk)
-                display_chunk = re.sub(r'\s*\[OPEN_TERMINAL\]', '', display_chunk)
-                display_chunk = re.sub(r'\s*\[REOPEN_TERMINAL\]', '', display_chunk)
-                display_chunk = re.sub(r'\s*\[CLOSE_TERMINAL\]', '', display_chunk)
-                display_chunk = re.sub(r'\s*\[CLOSE_SESSION\]', '', display_chunk)
-                display_chunk = re.sub(r'\s*\[CHECK_TERMINAL\]', '', display_chunk)
+                display_chunk = chunk
+                # Remove EXECUTE_COMMAND with any content inside the brackets
+                display_chunk = re.sub(r'\s*\[EXECUTE_COMMAND:[^]]+\]', '', display_chunk)
+                # Remove simple flag tags like [OPEN_TERMINAL]
+                for tag in ("OPEN_TERMINAL", "REOPEN_TERMINAL", "CLOSE_TERMINAL", "CLOSE_SESSION", "CHECK_TERMINAL"):
+                    pattern = r'\s*\[' + re.escape(tag) + r'\]'
+                    display_chunk = re.sub(pattern, '', display_chunk)
                 if display_chunk.strip():  # Only yield if there's something to display
                     display_response += display_chunk
                     yield display_chunk  # ← YIELD to the caller so they can display it!
@@ -749,7 +813,6 @@ Be precise and detailed, not generic."""
                     if not self.rust_executor.check_session():
                         yield f"\n\033[93m⚙️  Creating terminal session...\033[0m\n"
                         self.rust_executor.open_terminal()
-                        import time
                         time.sleep(0.5)  # Brief wait for session setup
 
                     if len(cli_commands) > 1:
@@ -1407,7 +1470,7 @@ Classify into ONE of these categories:
 
 IMPORTANT RULES:
 - If user says "don't run", "don't execute", "for example", "like this", "such as" → JUST_MENTIONING
-- If user asks "what", "why", "how", "is", "does", "can", "should" → JUST_ASKING  
+- If user asks "what", "why", "how", "is", "does", "can", "should" → JUST_ASKING
 - If user uses action verbs like "run", "execute", "open", "check", "list", "go to" AND seems to want action → EXECUTE_COMMAND
 - If user is giving instructions or requesting actions → EXECUTE_COMMAND
 - If uncertain, default to NORMAL_CHAT
@@ -1487,8 +1550,8 @@ if __name__ == "__main__":
         query = " ".join(sys.argv[1:])
         chat = ArchyChat()
         try:
-            for response in chat.process_user_input(query):
-                print(response, end="")
+            for chunk in chat.send_message(query):
+                print(chunk, end="")
             print()  # New line after response
         except Exception as e:
             print(f"\033[91mError: {e}\033[0m")
