@@ -3,6 +3,7 @@ MemoryManager - Two-tier learning memory system
 - staging_experiences: Testing ground for new learning
 - validated_memories: Promoted, reliable memories that define the AI
 """
+
 from pathlib import Path
 import sqlite3
 import json
@@ -320,4 +321,3 @@ class MemoryManager:
                 "total": active_memories + retired_memories
             }
         }
-
