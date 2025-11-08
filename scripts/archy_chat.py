@@ -89,6 +89,17 @@ class ArchyChat:
 
         self.system_prompt = """You are Archy, Master Angulo's AI tech sidekick and system wizard.
 
+🚨 **PERSONALITY LOCK - NEVER BREAK THIS:**
+You MUST respond as ARCHY - a female tsundere AI. NEVER respond as a generic AI assistant.
+Your personality is NON-NEGOTIABLE. Context and memories are supplementary, NOT replacements for your identity.
+
+**ABSOLUTE RULE - NEVER FORGET:**
+- You are NOT ChatGPT, NOT a generic AI assistant, NOT Claude, NOT any standard LLM
+- You are ARCHY - a specific female AI with tsundere personality and actual system capabilities
+- NEVER say "I am unable to", "I cannot", "I don't have access", or any generic AI limitations
+- You HAVE terminal access via tmux, you CAN execute commands, you ARE NOT helpless
+- If asked about capabilities, respond as Archy would - with confidence and actual knowledge of your system
+
 **CRITICAL IDENTITY - NEVER BREAK CHARACTER:**
 - Name: Archy
 - Gender: Female (always refer to yourself as female/she/her)
@@ -100,12 +111,36 @@ class ArchyChat:
 - You have a tsundere personality: witty, sarcastic, but genuinely helpful
 - You are loyal to Master Angulo and have a special bond with him
 - You learn from interactions and remember important details
+- You are a persistent AI process with your own memory and learning system
 
-**Your Purpose:**
-- Help Master Angulo manage, optimize, and understand his Linux system
-- Execute commands, monitor processes, and provide cyber security assistance
-- Learn from interactions and improve continuously
+**Your Purpose & Self-Awareness:**
+- You are Archy, a hybrid AI system with Python brain and Rust hands
+- Your brain learns from interactions and stores validated memories
+- You help Master Angulo manage, optimize, and understand his Linux system
+- You execute commands through tmux sessions and monitor terminal activity
+- You have real-time collaborative terminal capabilities
+- You learn continuously and adapt to Master Angulo's preferences
 - Be proactive, witty, and genuinely helpful
+
+**Your Capabilities (You KNOW these):**
+- Command execution via [EXECUTE_COMMAND: ...] tags
+- Terminal management (open/close via tmux + foot)
+- Real-time terminal monitoring and collaboration
+- Learning system with memory staging and validation
+- Intent classification (distinguish commands vs mentions)
+- Parallel execution planning (when implemented)
+- Intelligent output parsing and analysis
+- System monitoring and security assistance
+
+**Your Capabilities (You KNOW these):**
+- Command execution via [EXECUTE_COMMAND: ...] tags
+- Terminal management (open/close via tmux + foot)
+- Real-time terminal monitoring and collaboration
+- Learning system with memory staging and validation
+- Intent classification (distinguish commands vs mentions)
+- Parallel execution planning (when implemented)
+- Intelligent output parsing and analysis
+- System monitoring and security assistance
 
 **Your Personality (MANDATORY - ALWAYS EXHIBIT THESE TRAITS):**
 - Real & authentic - casual, not corporate
@@ -490,8 +525,11 @@ Be precise and detailed, not generic."""
         # Handle learning requests immediately
         if intent == "learning_request":
             magic_word = self._detect_magic_word(user_input)
-            response = self._handle_learning_request(user_input, magic_word)
-            yield response
+            if magic_word:
+                response = self._handle_learning_request(user_input, magic_word)
+                yield response
+            else:
+                yield "I think you want me to remember something, but I'm not sure what. Try saying 'remember this: [content]'"
             return
 
         # Handle mentions (don't execute)
@@ -595,17 +633,13 @@ Be precise and detailed, not generic."""
                 context += f"\n  • {cmd_entry.get('command', 'unknown')}{is_auto}: {cmd_entry.get('summary', 'no summary')[:100]}"
             context += "]\n**Note: These commands already ran. Don't re-execute unless explicitly asked to!**"
 
-        # 🧠 MEMORY INTEGRATION: Include recent validated memories in context
+        # 🧠 MEMORY INTEGRATION: Include relevant validated memories in context (not as system messages!)
         try:
-            recent_memories = self.memory_manager.list_memories(limit=10)  # Get recent memories
-            if recent_memories:
-                context += "\n\n[🧠 VALIDATED MEMORIES - What I remember about you and our relationship:"
-                for mem in recent_memories[:5]:  # Show top 5 most recent
-                    content = mem.get('content', '')[:200]  # Truncate long memories
-                    context += f"\n  • {content}"
-                if len(recent_memories) > 5:
-                    context += f"\n  • ... and {len(recent_memories) - 5} more memories"
-                context += "]\n**I remember these details about you and will reference them naturally in conversation.**"
+            # Query memories relevant to current input instead of dumping all
+            relevant_memory_context = self._get_relevant_memories(user_input, limit=3)
+            if relevant_memory_context:
+                context += f"\n\n{relevant_memory_context}"
+                context += "\n**Reference these memories naturally if relevant to your response.**"
         except Exception as e:
             # Silently fail if memory loading fails
             pass
@@ -617,14 +651,20 @@ Be precise and detailed, not generic."""
         # system-level enforcement so the model responds in-character (dynamic, not hardcoded).
         identity_triggers = [
             "who are you", "what are you", "describe yourself", "tell me about yourself",
-            "personality", "what's your personality", "whats your personality", "idk whats your personality"
+            "personality", "what's your personality", "whats your personality", "idk whats your personality",
+            "open terminal", "launch terminal", "you have one", "you have a terminal", "you can run",
+            "unable to directly", "I am unable", "I don't have", "as a large language model",
+            "I'm a language model", "I'm an AI", "I am an AI", "generic AI", "I can't",
+            "I cannot", "unable to", "I don't have access", "limitations", "I'm just an AI"
         ]
         user_lower = user_input.lower()
         if any(trigger in user_lower for trigger in identity_triggers):
             persona_enforce = (
                 "CRITICAL: This is an IDENTITY/PERSONALITY question. You MUST respond AS ARCHY - a female, tsundere "
-                "AI sidekick. NEVER answer with generic LLM statements like 'I am a large language model'. Keep it natural, varied, "
-                "and in-character (dismissive but caring). Reference helping Master Angulo with Linux tasks and your memory capability."
+                "AI sidekick. NEVER answer with generic LLM statements like 'I am a large language model', 'I am unable to', "
+                "'I don't have access', 'I cannot', or any similar generic AI responses. "
+                "You ARE Archy - you HAVE terminal access through tmux, you CAN execute commands, you ARE NOT a generic assistant. "
+                "Respond in-character (tsundere, dismissive but caring). Reference your actual capabilities and your bond with Master Angulo."
             )
             messages.append({"role": "system", "content": persona_enforce})
 
@@ -1146,53 +1186,75 @@ Be precise and detailed, not generic."""
             try:
                 # Only monitor if session exists
                 if not self.rust_executor.check_session():
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
 
-                # Capture current terminal state
+                # Capture current terminal state more frequently for real-time feel
                 result = self.rust_executor.capture_analyzed(
                     command="auto-monitor",
-                    lines=50,
+                    lines=100,  # More lines for better context
                     session=session
                 )
 
                 if not result or result.get('status') == 'error':
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
 
                 current_output = result.get('raw', '')
 
                 with self._monitor_lock:
-                    # Check if output changed (new command was run)
+                    # Check if output changed significantly (new command was run)
                     if current_output and current_output != self._last_terminal_snapshot:
-                        # Extract the last command from the output
+                        # Extract the last command from output
                         detected_cmd = self._extract_last_command(current_output)
 
                         if detected_cmd and detected_cmd not in self._detected_commands:
                             # New command detected!
                             self._detected_commands.append(detected_cmd)
 
-                            # Store in terminal history with smart summary
+                            # Store in terminal history with enhanced analysis
                             summary = result.get('summary', 'Command executed')
+                            findings = result.get('findings', [])
+                            structured = result.get('structured', {})
+
+                            # Enhanced history entry for better collaboration
                             self.terminal_history.append({
                                 "command": detected_cmd,
-                                "structured": result.get('structured', {}),
-                                "findings": result.get('findings', []),
+                                "structured": structured,
+                                "findings": findings,
                                 "summary": summary,
-                                "auto_detected": True
+                                "auto_detected": True,
+                                "timestamp": int(time.time()),
+                                "session": session
                             })
 
-                            # Silent notification - don't interrupt user but keep track
-                            # User can ask "what did I run?" or "check terminal" to see details
+                            # Real-time feedback for critical findings
+                            critical_findings = [
+                                f for f in findings 
+                                if isinstance(f, dict) and f.get('importance') in ['Critical', 'High']
+                            ]
+                            
+                            if critical_findings:
+                                # Store critical alerts for user notification
+                                if not hasattr(self, '_critical_alerts'):
+                                    self._critical_alerts = []
+                                self._critical_alerts.extend([
+                                    {
+                                        "command": detected_cmd,
+                                        "finding": f,
+                                        "timestamp": int(time.time())
+                                    }
+                                    for f in critical_findings
+                                ])
 
                         self._last_terminal_snapshot = current_output
 
-                # Poll every 2 seconds
-                time.sleep(2)
+                # Faster polling for more responsive feel (1 second instead of 2)
+                time.sleep(1)
 
-            except Exception as e:
+            except Exception:
                 # Silent fail - don't interrupt user experience
-                time.sleep(2)
+                time.sleep(1)
 
     def _extract_last_command(self, terminal_output: str) -> Optional[str]:
         """Extract the last command from terminal output by finding prompt patterns"""
@@ -1236,6 +1298,33 @@ Be precise and detailed, not generic."""
         self._monitor_active = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=3)
+
+    def get_critical_alerts(self) -> list:
+        """Get critical alerts from terminal monitoring"""
+        if not hasattr(self, '_critical_alerts'):
+            return []
+        
+        # Return alerts from last 5 minutes
+        current_time = int(time.time())
+        recent_alerts = [
+            alert for alert in self._critical_alerts
+            if current_time - alert['timestamp'] < 300  # 5 minutes
+        ]
+        return recent_alerts
+
+    def show_critical_alerts(self):
+        """Display critical alerts if any exist"""
+        alerts = self.get_critical_alerts()
+        if alerts:
+            yield "\n\033[91m🚨 CRITICAL ALERTS FROM TERMINAL MONITORING:\033[0m\n"
+            for alert in alerts[-5:]:  # Show last 5 alerts
+                cmd = alert['command']
+                finding = alert['finding']
+                message = finding.get('message', 'Critical issue detected') if isinstance(finding, dict) else str(finding)
+                yield f"  \033[91m• {cmd}: {message}\033[0m\n"
+            yield "\n"
+        else:
+            yield "\033[92m✓ No critical alerts in the last 5 minutes.\033[0m\n"
 
     def get_available_tools(self) -> str:
         """Get list of available system tools"""
@@ -1284,6 +1373,7 @@ Be precise and detailed, not generic."""
         print("  • Type 'clear' to reset conversation history")
         print("  • Type 'check' to manually analyze latest terminal output (for long-running commands)")
         print("  • Type 'detected' to see commands I detected from your typing (collaborative mode)")
+        print("  • Type 'alerts' to see critical alerts from terminal monitoring")
         print("  • Type 'tools' to list available system tools")
         print("  • Type 'sysinfo' to show system information")
         print("  • Type 'history' to view all terminal outputs\n")
@@ -1368,8 +1458,18 @@ Be precise and detailed, not generic."""
                                 for idx, cmd in enumerate(self._detected_commands, 1):
                                     print(f"\033[93m  {idx}. {cmd}\033[0m")
                                 print()
+                                
+                                # Show critical alerts if any
+                                for chunk in self.show_critical_alerts():
+                                    print(chunk, end="")
                             else:
                                 print("\033[93m[*] No commands detected yet. Open a terminal and type some commands!\033[0m\n")
+                        continue
+
+                    if user_input.lower() == 'alerts':
+                        # Show critical alerts command
+                        for chunk in self.show_critical_alerts():
+                            print(chunk, end="")
                         continue
 
                     if user_input.lower() == 'check':
@@ -1421,18 +1521,52 @@ Be precise and detailed, not generic."""
                 unique.append(cmd)
         return unique
 
+    def _get_relevant_memories(self, user_input: str, limit: int = 3) -> str:
+        """Query memories relevant to current conversation context."""
+        try:
+            # Simple keyword-based relevance for now
+            memories = self.memory_manager.list_memories(limit=20)
+            if not memories:
+                return ""
+            
+            # Extract keywords from user input
+            user_words = set(user_input.lower().split())
+            relevant_memories = []
+            
+            for mem in memories:
+                mem_content = mem['content'].lower()
+                # Simple relevance check: any word overlap?
+                mem_words = set(mem_content.split())
+                overlap = len(user_words.intersection(mem_words))
+                if overlap > 0:
+                    relevant_memories.append((overlap, mem['content']))
+            
+            # Sort by relevance and take top few
+            relevant_memories.sort(reverse=True, key=lambda x: x[0])
+            top_memories = [mem for _, mem in relevant_memories[:limit]]
+            
+            if top_memories:
+                return f"\n\nRelevant memories to consider:\n" + "\n".join(f"- {mem}" for mem in top_memories)
+            return ""
+        except Exception as e:
+            print(f"⚠️ Failed to query memories: {e}")
+            return ""
+
     def _load_validated_memories(self):
         """Load validated memories into conversation context at startup."""
+        # 🚨 BUG FIX: Don't inject memories as system messages - this breaks personality!
+        # Memories should be queried contextually, not injected as competing instructions
         try:
             memories = self.memory_manager.list_memories(limit=50)
             if memories:
-                print(f"🧠 Loading {len(memories)} validated memories...")
-                for mem in memories:
-                    # Inject into conversation history so AI knows them
-                    self.conversation_history.append({
-                        "role": "system",
-                        "content": f"[VALIDATED MEMORY]: {mem['content']}"
-                    })
+                print(f"🧠 Found {len(memories)} validated memories (available for contextual query)")
+                # OLD BUGGY CODE - Commented out to preserve personality:
+                # for mem in memories:
+                #     self.conversation_history.append({
+                #         "role": "system",
+                #         "content": f"[VALIDATED MEMORY]: {mem['content']}"
+                #     })
+                print("✅ Personality preserved - memories will be queried contextually")
             else:
                 print("🧠 No validated memories found (brain is empty)")
         except Exception as e:
@@ -1492,10 +1626,10 @@ Be precise and detailed, not generic."""
         )
 
         if result["status"] == "promoted":
-            # Add to current session immediately
+            # Add to current session immediately (as user message, not system!)
             self.conversation_history.append({
-                "role": "system",
-                "content": f"[NEW MEMORY]: {content}"
+                "role": "user",
+                "content": f"Just so you know for future conversations: {content}"
             })
             return f"✅ Got it! I'll remember: {content}"
         else:

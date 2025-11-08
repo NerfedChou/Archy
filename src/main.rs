@@ -16,6 +16,9 @@ mod tmux;
 mod batch;
 mod errors;  // NEW: Error detection module
 
+#[cfg(test)]
+mod test_error_detection;
+
 use output::DisplayOutput;
 use config::Config;
 use helpers::{response, params, Response};
