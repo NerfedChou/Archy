@@ -158,6 +158,11 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
         _ => parse_generic(raw, metadata),
     };
 
+    // NEW: Add command to structured output for collaborative monitoring
+    if let Some(obj) = parsed.structured.as_object_mut() {
+        obj.insert("command".to_string(), json!(command));
+    }
+
     // NEW: Add error findings to the parsed output
     for detected_error in detected_errors {
         parsed.findings.push(Finding {
@@ -175,10 +180,46 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
     // NEW: Set status based on error detection
     parsed.status = error_status;
 
-    parsed
+parsed
 }
 
+/// Extract the last command from terminal output by finding prompt patterns
+pub fn extract_last_command(terminal_output: &str) -> Option<String> {
+    let lines: Vec<&str> = terminal_output.trim().split('\n').collect();
+    
+    // Common prompt patterns (converted from Python regex)
+    let prompt_patterns = [
+        r"\[[^\]]+\]\$\s+(.+)",           // [user@host dir]$ command (bash)
+        r"\[[^\]]+\]\#\s+(.+)",           // [user@host dir]# command (root bash)
+        r"\[[^\]]+\s+[^\]]+\]\$\s+(.+)",  // [user@host path]$ command (bash with path)
+        r"[$#]\s+(.+)",                    // $ command or # command (simple prompt)
+        r"➜\s+\S+\s+(.+)",                // ➜ dir command (oh-my-zsh)
+        r"❯\s+(.+)",                       // ❯ command (starship/fish)
+        r">\s+(.+)",                       // > command (fish simple)
+        r"λ\s+(.+)",                       // λ command (lambda prompt)
+        r"\$\s+(.+)",                      // $ command (zsh/bash)
+        r"%\s+(.+)",                       // % command (zsh)
+    ];
 
+    // Scan from bottom up to find most recent command
+    for line in lines.iter().rev() {
+        for pattern in &prompt_patterns {
+            if let Ok(re) = Regex::new(pattern) {
+                if let Some(captures) = re.captures(line) {
+                    if let Some(cmd_match) = captures.get(1) {
+                        let cmd = cmd_match.as_str().trim();
+                        // Filter out empty, very short, or just prompt characters
+                        if !cmd.is_empty() && cmd.len() > 1 && !cmd.starts_with(['$', '#', '>', '%']) {
+                            return Some(cmd.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 /// Parse nmap output
 fn parse_nmap(raw: &str, metadata: Metadata) -> ParsedOutput {
