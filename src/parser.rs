@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use regex::Regex;
 use crate::errors;  // NEW: Import error detection module
+use crate::command::{CommandAnalyzer, CommandInfo};  // NEW: Import command analysis module
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Importance {
@@ -39,6 +40,7 @@ pub struct ParsedOutput {
     pub metadata: Metadata,
     pub status: String,  // NEW: "success", "warning", or "error"
     pub raw_output: String,  // NEW: Keep original output for Python
+    pub command_info: Option<CommandInfo>,  // NEW: Command analysis information
 }
 
 impl ParsedOutput {
@@ -52,6 +54,7 @@ impl ParsedOutput {
             metadata,
             status: String::new(),
             raw_output: raw.to_string(),
+            command_info: None,
         }
     }
 
@@ -144,6 +147,10 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
     let detected_errors = errors::detect_errors(raw);
     let error_status = errors::determine_status(&detected_errors);
 
+    // NEW: Analyze command for type, safety, and parallelizability
+    let analyzer = CommandAnalyzer::new();
+    let command_info = analyzer.analyze(command);
+
     // Parse based on format
     let mut parsed = match format.as_str() {
         "nmap" => parse_nmap(raw, metadata),
@@ -179,6 +186,9 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
 
     // NEW: Set status based on error detection
     parsed.status = error_status;
+
+    // NEW: Add command analysis information
+    parsed.command_info = Some(command_info);
 
 parsed
 }

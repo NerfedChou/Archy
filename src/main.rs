@@ -15,6 +15,7 @@ mod helpers;
 mod tmux;
 mod batch;
 mod errors;  // NEW: Error detection module
+mod command;  // NEW: Command analysis module
 
 #[cfg(test)]
 mod test_error_detection;
