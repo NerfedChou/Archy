@@ -14,6 +14,10 @@ mod config;
 mod helpers;
 mod tmux;
 mod batch;
+mod errors;  // NEW: Error detection module
+
+#[cfg(test)]
+mod test_error_detection;
 
 use output::DisplayOutput;
 use config::Config;
@@ -1435,7 +1439,15 @@ fn handle_capture_analyzed(stream: &mut UnixStream, data: &serde_json::Value) ->
     let display_output = match output {
         Ok(out) if out.status.success() => {
             let raw_output = String::from_utf8_lossy(&out.stdout).to_string();
-            DisplayOutput::from_command_output(command, &raw_output, 0)
+            
+            // If no command provided, try to detect it from terminal output
+            let detected_command = if command.is_empty() {
+                parser::extract_last_command(&raw_output).unwrap_or_else(|| "auto-detected".to_string())
+            } else {
+                command.to_string()
+            };
+            
+            DisplayOutput::from_command_output(&detected_command, &raw_output, 0)
         }
         Ok(_) => {
             DisplayOutput::from_error(command, "Failed to capture output")

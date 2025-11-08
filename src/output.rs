@@ -24,6 +24,10 @@ pub struct DisplayOutput {
     pub display_plain: String,       // No colors (for logging)
 
     pub metadata: Metadata,
+    
+    // NEW: Include full parsed output for Python access
+    pub parsed: Option<Value>,       // Full ParsedOutput with status/raw_output
+    pub raw_output: String,          // Original command output
 }
 
 impl DisplayOutput {
@@ -42,16 +46,18 @@ impl DisplayOutput {
         let is_success = exit_code == 0;
 
         DisplayOutput {
-            success: is_success,
+            success: is_success && parsed.status != "error",
             command: command.to_string(),
-            status: if is_success { "success".to_string() } else { "error".to_string() },
+            status: parsed.status.clone(),
             exit_code,
-            structured: parsed.structured,
-            findings: parsed.findings,
-            summary: parsed.summary,
+            structured: parsed.structured.clone(),
+            findings: parsed.findings.clone(),
+            summary: parsed.summary.clone(),
             display,
             display_plain,
-            metadata: parsed.metadata,
+            metadata: parsed.metadata.clone(),
+            parsed: Some(serde_json::to_value(&parsed).unwrap_or_default()),
+            raw_output: raw_output.to_string(),
         }
     }
 
@@ -78,6 +84,8 @@ impl DisplayOutput {
                 duration_ms: None,
                 format_detected: "error".to_string(),
             },
+            parsed: None,
+            raw_output: error.to_string(),
         }
     }
 
@@ -104,6 +112,8 @@ impl DisplayOutput {
                 duration_ms: None,
                 format_detected: "timeout".to_string(),
             },
+            parsed: None,
+            raw_output: partial_output.to_string(),
         }
     }
 
@@ -131,6 +141,8 @@ impl DisplayOutput {
                 duration_ms: None,
                 format_detected: "simple".to_string(),
             },
+            parsed: None,
+            raw_output: message.to_string(),
         }
     }
 }

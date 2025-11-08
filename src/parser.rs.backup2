@@ -41,47 +41,6 @@ pub struct ParsedOutput {
     pub raw_output: String,  // NEW: Keep original output for Python
 }
 
-impl ParsedOutput {
-    /// Create a new ParsedOutput with default values
-    fn new(raw: &str, metadata: Metadata) -> Self {
-        ParsedOutput {
-            raw: raw.to_string(),
-            structured: json!({}),
-            findings: Vec::new(),
-            summary: String::new(),
-            metadata,
-            status: String::new(),
-            raw_output: raw.to_string(),
-        }
-    }
-
-    /// Builder method to set structured data
-    fn with_structured(mut self, structured: Value) -> Self {
-        self.structured = structured;
-        self
-    }
-
-    /// Builder method to set findings
-    fn with_findings(mut self, findings: Vec<Finding>) -> Self {
-        self.findings = findings;
-        self
-    }
-
-    /// Builder method to set summary
-    fn with_summary(mut self, summary: String) -> Self {
-        self.summary = summary;
-        self
-    }
-
-    /// Complete the output with default status if needed
-    fn complete(mut self) -> Self {
-        if self.status.is_empty() {
-            self.status = "success".to_string();
-        }
-        self
-    }
-}
-
 /// Detect the format of command output
 pub fn detect_format(output: &str, command: &str) -> String {
     let lower_cmd = command.to_lowercase();
@@ -158,11 +117,6 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
         _ => parse_generic(raw, metadata),
     };
 
-    // NEW: Add command to structured output for collaborative monitoring
-    if let Some(obj) = parsed.structured.as_object_mut() {
-        obj.insert("command".to_string(), json!(command));
-    }
-
     // NEW: Add error findings to the parsed output
     for detected_error in detected_errors {
         parsed.findings.push(Finding {
@@ -180,45 +134,18 @@ pub fn parse_intelligently(raw: &str, command: &str) -> ParsedOutput {
     // NEW: Set status based on error detection
     parsed.status = error_status;
 
-parsed
+    parsed
 }
 
-/// Extract the last command from terminal output by finding prompt patterns
-pub fn extract_last_command(terminal_output: &str) -> Option<String> {
-    let lines: Vec<&str> = terminal_output.trim().split('\n').collect();
-    
-    // Common prompt patterns (converted from Python regex)
-    let prompt_patterns = [
-        r"\[[^\]]+\]\$\s+(.+)",           // [user@host dir]$ command (bash)
-        r"\[[^\]]+\]\#\s+(.+)",           // [user@host dir]# command (root bash)
-        r"\[[^\]]+\s+[^\]]+\]\$\s+(.+)",  // [user@host path]$ command (bash with path)
-        r"[$#]\s+(.+)",                    // $ command or # command (simple prompt)
-        r"➜\s+\S+\s+(.+)",                // ➜ dir command (oh-my-zsh)
-        r"❯\s+(.+)",                       // ❯ command (starship/fish)
-        r">\s+(.+)",                       // > command (fish simple)
-        r"λ\s+(.+)",                       // λ command (lambda prompt)
-        r"\$\s+(.+)",                      // $ command (zsh/bash)
-        r"%\s+(.+)",                       // % command (zsh)
-    ];
-
-    // Scan from bottom up to find most recent command
-    for line in lines.iter().rev() {
-        for pattern in &prompt_patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                if let Some(captures) = re.captures(line) {
-                    if let Some(cmd_match) = captures.get(1) {
-                        let cmd = cmd_match.as_str().trim();
-                        // Filter out empty, very short, or just prompt characters
-                        if !cmd.is_empty() && cmd.len() > 1 && !cmd.starts_with(['$', '#', '>', '%']) {
-                            return Some(cmd.to_string());
-                        }
-                    }
-                }
-            }
-        }
+/// Helper to complete ParsedOutput with default status
+fn complete_output(mut output: ParsedOutput, raw: &str) -> ParsedOutput {
+    // Set default status if not already set (will be overridden by error detection)
+    if output.status.is_empty() {
+        output.status = "success".to_string();
     }
-
-    None
+    // Keep raw output for Python
+    output.raw_output = raw.to_string();
+    output
 }
 
 /// Parse nmap output
@@ -284,11 +211,13 @@ fn parse_nmap(raw: &str, metadata: Metadata) -> ParsedOutput {
         "Network scan complete - no hosts detected".to_string()
     };
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse network table (netstat/ss output)
@@ -341,11 +270,13 @@ fn parse_network_table(raw: &str, metadata: Metadata) -> ParsedOutput {
 
     let summary = format!("{} established, {} listening", established, listening);
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse process table output
@@ -368,11 +299,13 @@ fn parse_process_table(raw: &str, metadata: Metadata) -> ParsedOutput {
 
     let summary = format!("{} processes", process_count);
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse ls -l output
@@ -413,11 +346,13 @@ fn parse_ls_long(raw: &str, metadata: Metadata) -> ParsedOutput {
 
     let summary = format!("{} files, {} directories", files, directories);
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse ip addr output
@@ -466,11 +401,13 @@ fn parse_ip_addr(raw: &str, metadata: Metadata) -> ParsedOutput {
 
     let summary = format!("{} interfaces, {} IPs", interfaces.len(), ipv4_addresses.len());
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse systemctl output
@@ -527,11 +464,13 @@ fn parse_systemctl(raw: &str, metadata: Metadata) -> ParsedOutput {
         format!("{} active, {} failed", active_services.len(), failed_services.len())
     };
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse disk usage output (df)
@@ -579,11 +518,13 @@ fn parse_disk_usage(raw: &str, metadata: Metadata) -> ParsedOutput {
 
     let summary = format!("{} filesystem(s) checked", filesystems.len());
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse JSON output
@@ -619,11 +560,13 @@ fn parse_json(raw: &str, metadata: Metadata) -> ParsedOutput {
         }
     };
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Parse journalctl output - extract errors, warnings, and service issues
@@ -694,11 +637,13 @@ fn parse_journalctl(raw: &str, metadata: Metadata) -> ParsedOutput {
         "No errors or warnings found".to_string()
     };
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
 /// Generic parser for unknown formats
@@ -730,10 +675,12 @@ fn parse_generic(raw: &str, metadata: Metadata) -> ParsedOutput {
         format!("{} lines of output", metadata.line_count)
     };
 
-    ParsedOutput::new(raw, metadata)
-        .with_structured(structured)
-        .with_findings(findings)
-        .with_summary(summary)
-        .complete()
+    ParsedOutput {
+        raw: raw.to_string(),
+        structured,
+        findings,
+        summary,
+        metadata,
+    }
 }
 
