@@ -724,10 +724,10 @@ Be precise and detailed, not generic."""
         with self._monitor_lock:
             if self._detected_commands:
                 recent_detected = self._detected_commands[-3:]  # Last 3 detected
-                context += "\n\n[🎯 COLLABORATIVE MODE - Commands Master Angulo typed manually:"
+                context += "\n\n[🎯 COLLABORATIVE MODE - Master Angulo recently ran:"
                 for cmd in recent_detected:
                     context += f"\n  • {cmd}"
-                context += "]\n**These are commands Master Angulo ran himself in the terminal. You can see and reference them!**"
+                context += "]\n**IMPORTANT: These commands were already executed by Master Angulo. Do NOT execute them again - just reference results if needed.**"
 
         # Add recent terminal history context if any
         if self.terminal_history:
@@ -896,7 +896,15 @@ Be precise and detailed, not generic."""
             # Check for command execution using the compiled regex
             command_matches = EXEC_CMD_RE.finditer(full_response)
             commands_to_run = [match.group(1).strip() for match in command_matches]
-
+            
+            # 🎯 CRITICAL FIX: Don't execute commands that were detected from collaborative monitoring
+            # Only execute commands that user explicitly requested, not ones mentioned in context
+            with self._monitor_lock:
+                for cmd in commands_to_run[:]:  # Use slice to avoid modifying during iteration
+                    if cmd in self._detected_commands:
+                        commands_to_run.remove(cmd)
+                        print(f"\033[93m[🎯] Skipping collaborative command: {cmd} (already detected as user-run)\033[0m")
+            
             # CRITICAL: Deduplicate commands to prevent double execution
             commands_to_run = self.deduplicate_commands(commands_to_run)
 
@@ -1008,14 +1016,12 @@ Be precise and detailed, not generic."""
 
                         # 🔍 SHOW ACTUAL RAW OUTPUT - Critical for seeing errors!
                         raw_output = result.get('raw_output', '') or result.get('display', '') or result.get('output', '')
-
-                        # Display raw output immediately so user sees errors
+                        
+                        # Display raw output immediately so user sees errors (but cleaner format)
                         if raw_output and raw_output.strip():
-                            yield "\n\033[90m" + "─" * 60 + "\033[0m\n"
-                            yield raw_output
-                            if not raw_output.endswith('\n'):
-                                yield "\n"
-                            yield "\033[90m" + "─" * 60 + "\033[0m\n"
+                            yield f"\n\033[90m{'─' * 40}\033[0m\n"
+                            yield f"\033[97m{raw_output}\033[0m\n"
+                            yield f"\033[90m{'─' * 40}\033[0m\n"
 
                         # Collect result for AI analysis
                         batch_results.append({
@@ -1325,6 +1331,10 @@ Be precise and detailed, not generic."""
                         if detected_cmd and detected_cmd not in self._detected_commands:
                             # New command detected!
                             self._detected_commands.append(detected_cmd)
+                            
+                            # Keep only recent 20 commands to prevent memory bloat
+                            if len(self._detected_commands) > 20:
+                                self._detected_commands = self._detected_commands[-20:]
 
                             # Store in terminal history with enhanced analysis
                             summary = result.get('summary', 'Command executed')
