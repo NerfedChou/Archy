@@ -1311,16 +1311,16 @@ Be precise and detailed, not generic."""
 
                 # Capture current terminal state more frequently for real-time feel
                 result = self.rust_executor.capture_analyzed(
-                    command="auto-monitor",
+                    command="",  # Empty command to trigger auto-detection
                     lines=100,  # More lines for better context
                     session=session
                 )
 
-                if not result or result.get('status') == 'error':
+                if not result or not result.get('success', False):
                     time.sleep(1)
                     continue
 
-                current_output = result.get('raw', '')
+                current_output = result.get('raw_output', '')
 
                 with self._monitor_lock:
                     # Check if output changed significantly (new command was run)
